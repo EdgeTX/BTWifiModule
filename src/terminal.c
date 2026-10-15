@@ -289,11 +289,27 @@ static void parserATCommand(char *line)
       }
       break;
 
-    case AT_CMD_BAUD:
-      // The firmware stays at 115200 (see board.h). EdgeTX switches to 115200
-      // after AT+BAUD4 without checking a response.
-      ESP_LOGI(LOG_UART, "Baud change requested (ignored, staying at 115200)");
+    case AT_CMD_BAUD: {
+      uint32_t baud_rate;
+      if (strcmp(cmd.argument, "4") == 0) {
+        baud_rate = BAUD_DEFAULT;
+      } else if (strcmp(cmd.argument, "6") == 0) {
+        baud_rate = BAUD_A2DP_PCM;
+      } else {
+        ESP_LOGW(LOG_UART, "Unsupported baud level: %s", cmd.argument);
+        break;
+      }
+
+      esp_err_t ret = uart_wait_tx_done(uart_num, pdMS_TO_TICKS(1000));
+      if (ret == ESP_OK) {
+        ret = uart_set_baudrate(uart_num, baud_rate);
+      }
+      if (ret != ESP_OK) {
+        ESP_LOGE(LOG_UART, "Unable to switch UART baud to %u: %s", (unsigned)baud_rate,
+                 esp_err_to_name(ret));
+      }
       break;
+    }
 
     case AT_CMD_HTRESET:
       if (bt_client_board_type == BLE_BOARD_HEADTRACKER) {

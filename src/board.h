@@ -63,10 +63,9 @@
 #define UART_RX_BUFFER 512
 #define UART_TX_BUFFER 512
 
-/** Radio link baud rates. The firmware stays fixed at 115200: EdgeTX sends
- *  `AT+BAUD4` at the 57600 factory rate and switches to 115200 without checking
- *  a response, so this module starts directly at 115200. */
+/** UART speeds used by the EdgeTX boot handshake and A2DP PCM stream. */
 #define BAUD_DEFAULT 115200
+#define BAUD_A2DP_PCM 460800
 #define BAUD_MAXIMUM 921600
 
 /** Maximum Bluetooth name length (advertised and persisted). */

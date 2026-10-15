@@ -68,7 +68,8 @@ response. Run it once per firmware variant.
 | `AT+TXPW<n>`   | `OK+Txpw:0` + mode line                             | -                      |
 | `AT+DISC?`     | `OK+DISCS`, `OK+DISC:<addr>` per peer, `OK+DISCE`   | central; peripheral none |
 | `AT+CLEAR`     | `OK+CLEAR`                                          | central; peripheral none |
-| `AT+BAUD<n>`   | no response (stays at 115200)                       | -                      |
+| `AT+BAUD4`     | no response; switches to 115200                     | -                      |
+| `AT+BAUD6`     | no response; switches to 460800                     | A2DP PCM               |
 | `AT+HTRESET`   | `OK+HTRESET`, or `ERROR` unless headtracker board   | -                      |
 | unknown        | no response                                         | -                      |
 

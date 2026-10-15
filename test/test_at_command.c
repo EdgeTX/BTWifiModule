@@ -62,10 +62,14 @@ void test_clear(void)
 
 void test_baud_argument(void)
 {
-  char line[] = "AT+BAUD4\r\n";
-  at_command_parse_t r = at_command_parse(line);
-  TEST_ASSERT_EQUAL(AT_CMD_BAUD, r.command);
-  TEST_ASSERT_EQUAL_STRING("4", r.argument);
+  char default_baud[] = "AT+BAUD4\r\n";
+  char a2dp_baud[] = "AT+BAUD6\r\n";
+  at_command_parse_t default_result = at_command_parse(default_baud);
+  at_command_parse_t a2dp_result = at_command_parse(a2dp_baud);
+  TEST_ASSERT_EQUAL(AT_CMD_BAUD, default_result.command);
+  TEST_ASSERT_EQUAL_STRING("4", default_result.argument);
+  TEST_ASSERT_EQUAL(AT_CMD_BAUD, a2dp_result.command);
+  TEST_ASSERT_EQUAL_STRING("6", a2dp_result.argument);
 }
 
 void test_htreset(void)

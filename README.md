@@ -49,8 +49,9 @@ service (`0xFFF0`, characteristic `0xFFF6`, NOTIFY).
 
 ## Wiring
 
-The module talks to the radio over a 3.3 V UART link (8N1, 115200 baud). Only
-TX, RX and GND are required; add +5V if the module is powered from the radio.
+The module talks to the radio over a 3.3 V UART link (8N1, 115200 baud at
+startup). A2DP PCM mode can switch the link to 460800 baud. Only TX, RX and GND
+are required; add +5V if the module is powered from the radio.
 The data lines are **crossed**: the module TX goes to the radio RX and the
 module RX to the radio TX. Keep GND common with the radio, and power the module
 from a supply that can handle the ESP32 current peaks.
@@ -74,12 +75,16 @@ The last two rows are the reference, non-validated targets (see
 
 ## EdgeTX protocol
 
-The module speaks the FrSky Bluetooth AT protocol over an 8N1 UART link at
-115200 baud. All responses are `\r\n`-terminated; the real ACK that advances
-EdgeTX is the `Central:<addr>` / `Peripheral:<addr>` line emitted after
-`AT+TXPW` / `AT+ROLE`. Trainer and S.Port frames are `0x7E`-delimited and
-byte-stuffed, while CRSF/Ghost are forwarded raw. See `AGENTS.md` for the full
-set of protocol invariants.
+The module speaks the FrSky Bluetooth AT protocol over an 8N1 UART link. The
+link starts at 115200 baud for the boot handshake. `AT+BAUD4` selects 115200;
+`AT+BAUD6` selects 460800 for mono A2DP PCM. Baud commands have no response, so
+EdgeTX must switch its UART immediately after sending the command. A2DP audio
+input is raw signed 16-bit little-endian mono PCM at 16 kHz; the module
+resamples it for the Bluetooth sink. All AT responses are `\r\n`-terminated;
+the real ACK that advances EdgeTX is the `Central:<addr>` / `Peripheral:<addr>`
+line emitted after `AT+TXPW` / `AT+ROLE`. Trainer and S.Port frames are
+`0x7E`-delimited and byte-stuffed, while CRSF/Ghost are forwarded raw. See
+`AGENTS.md` for the full set of protocol invariants.
 
 ## Code structure
 
@@ -192,18 +197,37 @@ module:
 
 | Command | Meaning |
 |---|---|
-| `AT+BAUD4` | baud rate level (this firmware stays at 115200) |
+| `AT+BAUD4` | switch to 115200 baud |
+| `AT+BAUD6` | switch to 460800 baud for mono A2DP PCM |
 | `AT+NAME<name>` | set the Bluetooth name (persisted and advertised) |
 | `AT+TXPW<n>` | TX power (acknowledged) |
 | `AT+ROLE0` | Peripheral (telemetry / trainer slave) |
 | `AT+ROLE1` | Central (trainer master) |
-| `AT+DISC?` | start a scan (central) |
+| `AT+DISC?` | scan BLE in Central mode or Classic Bluetooth in A2DP mode |
 | `AT+CON<addr>` | connect to a device (central) |
+| `AT+A2DPON` | enable the Classic Bluetooth A2DP source |
+| `AT+A2DPCON<addr>` | connect to an A2DP sink (12 hex digits, no separators) |
+| `AT+A2DPOFF` | stop A2DP and turn Bluetooth off |
+| `AT+BLEON` / `AT+BLEOFF` | enable the last BLE role / disable BLE |
+| `AT+BTOFF` | turn Bluetooth off |
 | `AT+CLEAR` | forget the saved device |
 | `AT+HTRESET` | reset the headtracker (BTWifiModule extension) |
 
 Responses: `OK+...`, `Central:<addr>`, `Peripheral:<addr>`, `Connected:<addr>`,
 `DisConnected`, `ERROR`.
+
+A2DP is enabled in the RM Pico Bluedroid configuration, not the NimBLE build.
+For a test without EdgeTX PCM input, build and flash `RM_pico_a2dp_test`; it
+streams a local 500 Hz tone. Connect to a discoverable sink with:
+
+```text
+AT+A2DPON
+AT+DISC?
+AT+A2DPCON<12-digit-address>
+```
+
+After the connection is established, send `AT+BAUD6` before transmitting PCM.
+To return to the normal radio link speed, send `AT+BAUD4` at 460800 baud.
 
 ## Credits
 
