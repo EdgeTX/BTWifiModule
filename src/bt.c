@@ -105,6 +105,7 @@ static bool s_classic_mode = false;
 static void bt_start_stack(esp_bt_mode_t mode)
 {
   esp_err_t ret;
+  esp_bt_mode_t controller_mode = bt_a2dp_supported() ? ESP_BT_MODE_BTDM : mode;
 
   if (!s_memreleased && !bt_a2dp_supported()) {
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
@@ -118,7 +119,7 @@ static void bt_start_stack(esp_bt_mode_t mode)
     return;
   }
 
-  ret = esp_bt_controller_enable(mode);
+  ret = esp_bt_controller_enable(controller_mode);
   if (ret != ESP_OK) {
     ESP_LOGE(LOG_BT, "%s: controller enable failed: %s", __func__, esp_err_to_name(ret));
     return;

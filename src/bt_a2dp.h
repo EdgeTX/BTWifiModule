@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "bt_addr.h"
+
 /** Initialize the Classic Bluetooth A2DP source with the configured name. */
 bool a2dp_init(const char *device_name);
 
@@ -19,3 +21,18 @@ void a2dp_connect(const char *addr);
  * Define A2DP_TEST_TONE at build time to substitute a local 500 Hz test signal.
  */
 void a2dp_feed_pcm(const uint8_t *data, size_t length);
+
+/** Process A2DP events and start the media stream when the connection is ready. */
+void a2dp_process(void);
+
+/** Start a Classic Bluetooth inquiry while the A2DP role is active. */
+bool bt_a2dp_start_discovery(void);
+
+/** Read one address found by Classic Bluetooth inquiry without blocking. */
+bool bt_a2dp_get_discovery_result(bt_addr_t address);
+
+/** Return whether the current or most recent inquiry has completed. */
+bool bt_a2dp_discovery_complete(void);
+
+/** Cancel an active Classic Bluetooth inquiry. */
+void bt_a2dp_cancel_discovery(void);

@@ -68,6 +68,7 @@ static role_t curMode = ROLE_UNKNOWN;
 static btcentralstate btCentralState = CENTRAL_STATE_DISCONNECT;
 static btperipheralstate btPeripherialState = PERIPHERIAL_STATE_DISCONNECTED;
 static role_t lastBleRole = ROLE_UNKNOWN;
+static bool a2dpScanActive;
 
 /** Current remote address (text) and the reusable response buffer. */
 static char rmtaddress[BT_ADDR_STR_LEN] = "000000000000";
@@ -269,6 +270,13 @@ static void parserATCommand(char *line)
         write_str("OK+DISCS\r\n");
         laddcnt = 0;
         btCentralState = CENTRAL_STATE_SCAN_START;
+      } else if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+        if (bt_a2dp_start_discovery()) {
+          a2dpScanActive = true;
+          write_str("OK+DISCS\r\n");
+        } else {
+          write_str("ERROR\r\n");
+        }
       }
       break;
 
@@ -516,8 +524,10 @@ static void setRole(role_t role)
       bt_disable();
       break;
     case ROLE_BTEDR_AUDIO_SOURCE:
+      bt_a2dp_cancel_discovery();
       a2dp_deinit();
       bt_disable();
+      a2dpScanActive = false;
       break;
     default:
       break;
@@ -690,6 +700,20 @@ static void runBT(void)
       break;
     case ROLE_BLE_PERIPHERAL:
       runBTPeripherial();
+      break;
+    case ROLE_BTEDR_AUDIO_SOURCE:
+      a2dp_process();
+      if (a2dpScanActive) {
+        bt_addr_t address;
+        while (bt_a2dp_get_discovery_result(address)) {
+          char address_text[BT_ADDR_STR_LEN];
+          write_fmt("OK+DISC:%s\r\n", bt_addr_to_str(address_text, address));
+        }
+        if (bt_a2dp_discovery_complete()) {
+          write_str("OK+DISCE\r\n");
+          a2dpScanActive = false;
+        }
+      }
       break;
     default:
       break;
