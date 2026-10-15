@@ -11,6 +11,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 
 #define LOG_BT "BT"
@@ -40,11 +41,22 @@ char *btaddrtostr(char dest[13], esp_bd_addr_t src)
 
 bool memreleased = false;
 
-void bt_init()
+// Classic BT/A2DP needs the controller's Classic memory, which can't be recovered once released
+// (until reboot). Only release it in builds that can't use Classic BT anyway.
+bool bt_a2dp_supported()
+{
+#if defined(CONFIG_BT_CLASSIC_ENABLED) && defined(CONFIG_BT_A2DP_ENABLE)
+  return true;
+#else
+  return false;
+#endif
+}
+
+static void bt_start_stack(esp_bt_mode_t mode)
 {
   esp_err_t ret;
 
-  if (!memreleased) {
+  if (!memreleased && !bt_a2dp_supported()) {
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
     memreleased = true;
   }
@@ -56,7 +68,7 @@ void bt_init()
     return;
   }
 
-  ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
+  ret = esp_bt_controller_enable(mode);
   if (ret) {
     ESP_LOGE(LOG_BT, "%s enable controller failed: %s\n", __func__, esp_err_to_name(ret));
     return;
@@ -74,7 +86,20 @@ void bt_init()
     return;
   }
 
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P9);
+  if (mode == ESP_BT_MODE_BLE) esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P9);
+}
+
+void bt_init()
+{
+  ESP_LOGI(LOG_BT, "Starting BLE stack");
+  bt_start_stack(ESP_BT_MODE_BLE);
+}
+
+// Note: BLE and Classic BT are never run together, the stack is restarted when switching.
+void bt_classic_init()
+{
+  ESP_LOGI(LOG_BT, "Starting Classic BT stack");
+  bt_start_stack(ESP_BT_MODE_CLASSIC_BT);
 }
 
 void bt_disable()

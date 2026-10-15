@@ -17,4 +17,6 @@ void strtobtaddr(esp_bd_addr_t dest, char *src);
 char *btaddrtostr(char dest[13], esp_bd_addr_t src);
 void bt_disable();
 void bt_init();
+void bt_classic_init();
+bool bt_a2dp_supported();
 void btSetName(const char *name);

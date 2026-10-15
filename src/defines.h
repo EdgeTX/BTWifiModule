@@ -58,6 +58,8 @@ typedef enum {
   ROLE_BLE_PERIPHERAL,
   ROLE_BLE_CENTRAL,
   ROLE_ADVANCE,
+  ROLE_BTEDR_AUDIO_SOURCE,  // Bluetooth Classic A2DP source (BLE is off in this mode)
+  ROLE_BT_OFF,              // All Bluetooth stacks off
   ROLE_COUNT
 } role_t;
 

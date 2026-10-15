@@ -6,6 +6,7 @@
 #include <nvs.h>
 
 #include "bt.h"
+#include "bt_a2dp.h"
 #include "bt_client.h"
 #include "bt_server.h"
 #include "cb.h"
@@ -47,6 +48,7 @@ typedef enum {
 } btperipheralstate;
 
 role_t curMode = ROLE_UNKNOWN;
+role_t lastBleRole = ROLE_UNKNOWN;
 btcentralstate btCentralState = CENTRAL_STATE_DISCONNECT;
 btperipheralstate btPeripherialState = PERIPHERIAL_STATE_DISCONNECTED;
 int64_t baudTimer = 0;
@@ -54,6 +56,22 @@ int laddcnt = 0;
 
 char rmtaddress[13] = "000000000000";
 char reusablebuff[REUSABLE_BUFFER];
+
+const char *roleName(role_t role)
+{
+  switch (role) {
+    case ROLE_BLE_PERIPHERAL:
+      return "BLE Peripheral";
+    case ROLE_BLE_CENTRAL:
+      return "BLE Central";
+    case ROLE_BTEDR_AUDIO_SOURCE:
+      return "A2DP Source";
+    case ROLE_BT_OFF:
+      return "Bluetooth Off";
+    default:
+      return "Unknown";
+  }
+}
 
 void sendBTMode()
 {
@@ -65,6 +83,9 @@ void sendBTMode()
     uart_write_bytes(uart_num, reusablebuff, strlen(reusablebuff));
   } else if (curMode == ROLE_BLE_CENTRAL) {
     snprintf(reusablebuff, sizeof(reusablebuff), "Central:%s\r\n", lcladdress);
+    uart_write_bytes(uart_num, reusablebuff, strlen(reusablebuff));
+  } else {
+    snprintf(reusablebuff, sizeof(reusablebuff), "Mode:%s\r\n", roleName(curMode));
     uart_write_bytes(uart_num, reusablebuff, strlen(reusablebuff));
   }
 }
@@ -147,6 +168,60 @@ void parserATCommand(char atcommand[])
     // before an AT+ACK or something is seen. Then revert back to the default
     // baud
 
+  } else if (strncmp(atcommand, "+BLEON", 6) == 0) {
+    // Re-enable BLE, using the last BLE role (central by default)
+    role_t r = ROLE_BLE_CENTRAL;
+    if (curMode == ROLE_BLE_PERIPHERAL || curMode == ROLE_BLE_CENTRAL)
+      r = curMode;
+    else if (lastBleRole != ROLE_UNKNOWN)
+      r = lastBleRole;
+    UART_WRITE_STRING(uart_num, "OK+BLEON\r\n");
+    setRole(r);
+    sendBTMode();
+
+  } else if (strncmp(atcommand, "+BLEOFF", 7) == 0) {
+    UART_WRITE_STRING(uart_num, "OK+BLEOFF\r\n");
+    if (curMode == ROLE_BLE_PERIPHERAL || curMode == ROLE_BLE_CENTRAL) {
+      setRole(ROLE_BT_OFF);
+      sendBTMode();
+    }
+
+  } else if (strncmp(atcommand, "+A2DPON", 7) == 0) {
+    if (bt_a2dp_supported()) {
+      // BLE and Classic BT can't run together, BLE is stopped first
+      UART_WRITE_STRING(uart_num, "OK+A2DPON\r\n");
+      setRole(ROLE_BTEDR_AUDIO_SOURCE);
+      sendBTMode();
+    } else {
+      ESP_LOGE(LOG_UART, "A2DP not supported in this build");
+      UART_WRITE_STRING(uart_num, "ERROR\r\n");
+    }
+
+  } else if (strncmp(atcommand, "+A2DPOFF", 8) == 0) {
+    UART_WRITE_STRING(uart_num, "OK+A2DPOFF\r\n");
+    if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+      setRole(ROLE_BT_OFF);
+      sendBTMode();
+    }
+
+  } else if (strncmp(atcommand, "+A2DPCON", 8) == 0) {
+    if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+      UART_WRITE_STRING(uart_num, "OK+A2DPCON\r\n");
+      a2dpConnect(atcommand + 8);
+    } else {
+      UART_WRITE_STRING(uart_num, "ERROR\r\n");
+    }
+
+  } else if (strncmp(atcommand, "+BTOFF", 6) == 0) {
+    UART_WRITE_STRING(uart_num, "OK+BTOFF\r\n");
+    setRole(ROLE_BT_OFF);
+    sendBTMode();
+
+  } else if (strncmp(atcommand, "+BTBOTH", 7) == 0) {
+    // Simultaneous BLE + A2DP isn't supported by this configuration (RAM/coexistence)
+    ESP_LOGE(LOG_UART, "BLE + A2DP at the same time is not supported");
+    UART_WRITE_STRING(uart_num, "ERROR\r\n");
+
   } else if (strncmp(atcommand, "+HTRESET", 8) == 0) {
     if (btc_board_type == BLE_BOARD_HEADTRACKER) {
       ESP_LOGI(LOG_UART, "Reset Head Tracker Requested");
@@ -204,6 +279,10 @@ void runUARTHead()
     ESP_LOGE(LOG_UART, "Invalid role loaded, defaulting to central");
     settings.role = ROLE_BLE_CENTRAL;
   }
+  if (settings.role == ROLE_BTEDR_AUDIO_SOURCE && !bt_a2dp_supported()) {
+    ESP_LOGE(LOG_UART, "A2DP not supported in this build, defaulting to central");
+    settings.role = ROLE_BLE_CENTRAL;
+  }
   setRole(settings.role);
 
   char* data = (char*)malloc(UART_RX_BUFFER + 1);
@@ -238,7 +317,7 @@ void runUARTHead()
         static char lc = 0;
         if (lc == 'A' && c == 'T') {
           atcommandlen = 0;
-        } else {
+        } else if (curMode == ROLE_BLE_CENTRAL || curMode == ROLE_BLE_PERIPHERAL) {
           frSkyProcessByte(c);
         }
 
@@ -262,14 +341,24 @@ void setRole(role_t role)
   switch (curMode) {
     case ROLE_BLE_CENTRAL:
     case ROLE_BLE_PERIPHERAL:
+      lastBleRole = curMode;
       bt_disable();
+      break;
+    case ROLE_BTEDR_AUDIO_SOURCE:
+      a2dpDeinit();
+      bt_disable();
+      break;
     default:
       break;
   }
 
+  // Drop any partially received AT command so stale parsing state isn't carried over
+  atcommandlen = -1;
+
   // Update Role
   curMode = role;
   settings.role = curMode;
+  ESP_LOGI(LOG_UART, "Active Bluetooth mode: %s", roleName(curMode));
 
   // Initialize
   switch (curMode) {
@@ -282,6 +371,16 @@ void setRole(role_t role)
       btPeripherialState = PERIPHERIAL_STATE_DISCONNECTED;
       bt_init();
       btpInit();
+      break;
+    case ROLE_BTEDR_AUDIO_SOURCE:
+      bt_classic_init();
+      if (!a2dpInit()) {
+        a2dpDeinit();
+        bt_disable();
+        curMode = ROLE_BT_OFF;
+        settings.role = curMode;
+        ESP_LOGE(LOG_UART, "A2DP start failed, Bluetooth is off");
+      }
       break;
     default:
       break;
