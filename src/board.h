@@ -88,6 +88,8 @@ typedef enum {
   ROLE_BLE_PERIPHERAL,
   ROLE_BLE_CENTRAL,
   ROLE_ADVANCE,  //< reserved for future modes
+  ROLE_BTEDR_AUDIO_SOURCE,
+  ROLE_BT_OFF,
   ROLE_COUNT
 } role_t;
 

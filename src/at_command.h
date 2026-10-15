@@ -25,6 +25,13 @@ typedef enum {
   AT_CMD_CLEAR,        //< AT+CLEAR  -> forget saved device
   AT_CMD_BAUD,         //< AT+BAUD<n> -> baud rate level
   AT_CMD_HTRESET,      //< AT+HTRESET -> reset headtracker (project extension)
+  AT_CMD_BLEON,
+  AT_CMD_BLEOFF,
+  AT_CMD_A2DPON,
+  AT_CMD_A2DPOFF,
+  AT_CMD_A2DPCON,
+  AT_CMD_BTOFF,
+  AT_CMD_BTBOTH,
 } at_command_t;
 
 /** Result of parsing an AT line. */

@@ -23,6 +23,7 @@
 #include "board.h"
 #include "bt.h"
 #include "bt_addr.h"
+#include "bt_a2dp.h"
 #include "bt_client.h"
 #include "bt_server.h"
 #include "cb.h"
@@ -66,6 +67,7 @@ typedef enum {
 static role_t curMode = ROLE_UNKNOWN;
 static btcentralstate btCentralState = CENTRAL_STATE_DISCONNECT;
 static btperipheralstate btPeripherialState = PERIPHERIAL_STATE_DISCONNECTED;
+static role_t lastBleRole = ROLE_UNKNOWN;
 
 /** Current remote address (text) and the reusable response buffer. */
 static char rmtaddress[BT_ADDR_STR_LEN] = "000000000000";
@@ -76,6 +78,22 @@ static int laddcnt = 0;
 
 static void runBT(void);
 static void setRole(role_t role);
+
+static const char *role_name(role_t role)
+{
+  switch (role) {
+    case ROLE_BLE_PERIPHERAL:
+      return "BLE Peripheral";
+    case ROLE_BLE_CENTRAL:
+      return "BLE Central";
+    case ROLE_BTEDR_AUDIO_SOURCE:
+      return "A2DP Source";
+    case ROLE_BT_OFF:
+      return "Bluetooth Off";
+    default:
+      return "Unknown";
+  }
+}
 
 /* ========================================================================== */
 /* UART output helpers                                                        */
@@ -115,6 +133,8 @@ static void sendBTMode(void)
     write_fmt("Peripheral:%s\r\n", lcladdress);
   } else if (curMode == ROLE_BLE_CENTRAL) {
     write_fmt("Central:%s\r\n", lcladdress);
+  } else {
+    write_fmt("Mode:%s\r\n", role_name(curMode));
   }
 }
 
@@ -256,6 +276,61 @@ static void parserATCommand(char *line)
       }
       break;
 
+    case AT_CMD_BLEON: {
+      role_t role = lastBleRole == ROLE_BLE_PERIPHERAL ? ROLE_BLE_PERIPHERAL : ROLE_BLE_CENTRAL;
+      write_str("OK+BLEON\r\n");
+      setRole(role);
+      sendBTMode();
+      break;
+    }
+
+    case AT_CMD_BLEOFF:
+      write_str("OK+BLEOFF\r\n");
+      if (curMode == ROLE_BLE_PERIPHERAL || curMode == ROLE_BLE_CENTRAL) {
+        setRole(ROLE_BT_OFF);
+        sendBTMode();
+      }
+      break;
+
+    case AT_CMD_A2DPON:
+      if (bt_a2dp_supported()) {
+        write_str("OK+A2DPON\r\n");
+        setRole(ROLE_BTEDR_AUDIO_SOURCE);
+        sendBTMode();
+      } else {
+        ESP_LOGE(LOG_UART, "A2DP not supported in this build");
+        write_str("ERROR\r\n");
+      }
+      break;
+
+    case AT_CMD_A2DPOFF:
+      write_str("OK+A2DPOFF\r\n");
+      if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+        setRole(ROLE_BT_OFF);
+        sendBTMode();
+      }
+      break;
+
+    case AT_CMD_A2DPCON:
+      if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+        write_str("OK+A2DPCON\r\n");
+        a2dp_connect(cmd.argument);
+      } else {
+        write_str("ERROR\r\n");
+      }
+      break;
+
+    case AT_CMD_BTOFF:
+      write_str("OK+BTOFF\r\n");
+      setRole(ROLE_BT_OFF);
+      sendBTMode();
+      break;
+
+    case AT_CMD_BTBOTH:
+      ESP_LOGE(LOG_UART, "BLE and A2DP cannot run simultaneously");
+      write_str("ERROR\r\n");
+      break;
+
     case AT_CMD_UNKNOWN:
     default:
       ESP_LOGE(LOG_UART, "Unknown AT Cmd: %s", line);
@@ -303,6 +378,10 @@ void runUARTHead(void *param)
   ESP_LOGI(LOG_UART, "Setting initial role");
   if (settings.role == ROLE_UNKNOWN) {
     ESP_LOGE(LOG_UART, "Invalid role loaded, defaulting to central");
+    settings.role = ROLE_BLE_CENTRAL;
+  }
+  if (settings.role == ROLE_BTEDR_AUDIO_SOURCE && !bt_a2dp_supported()) {
+    ESP_LOGE(LOG_UART, "A2DP not supported in this build, defaulting to central");
     settings.role = ROLE_BLE_CENTRAL;
   }
   setRole(settings.role);
@@ -392,14 +471,22 @@ static void setRole(role_t role)
   switch (curMode) {
     case ROLE_BLE_CENTRAL:
     case ROLE_BLE_PERIPHERAL:
+      lastBleRole = curMode;
+      bt_disable();
+      break;
+    case ROLE_BTEDR_AUDIO_SOURCE:
+      a2dp_deinit();
       bt_disable();
       break;
     default:
       break;
   }
 
+  atcommandlen = -1;
+
   curMode = role;
   settings.role = curMode;
+  ESP_LOGI(LOG_UART, "Active Bluetooth mode: %s", role_name(curMode));
 
   switch (curMode) {
     case ROLE_BLE_CENTRAL:
@@ -411,6 +498,16 @@ static void setRole(role_t role)
       btPeripherialState = PERIPHERIAL_STATE_DISCONNECTED;
       bt_init();
       bt_server_init();
+      break;
+    case ROLE_BTEDR_AUDIO_SOURCE:
+      bt_classic_init();
+      if (!a2dp_init(settings.name)) {
+        a2dp_deinit();
+        bt_disable();
+        curMode = ROLE_BT_OFF;
+        settings.role = curMode;
+        ESP_LOGE(LOG_UART, "A2DP start failed, Bluetooth is off");
+      }
       break;
     default:
       break;

@@ -59,6 +59,27 @@ at_command_parse_t at_command_parse(char *line)
   } else if (strncmp(p, "+HTRESET", 8) == 0) {
     result.command = AT_CMD_HTRESET;
     result.argument = "";
+  } else if (strncmp(p, "+BLEON", 6) == 0) {
+    result.command = AT_CMD_BLEON;
+    result.argument = "";
+  } else if (strncmp(p, "+BLEOFF", 7) == 0) {
+    result.command = AT_CMD_BLEOFF;
+    result.argument = "";
+  } else if (strncmp(p, "+A2DPON", 7) == 0) {
+    result.command = AT_CMD_A2DPON;
+    result.argument = "";
+  } else if (strncmp(p, "+A2DPOFF", 8) == 0) {
+    result.command = AT_CMD_A2DPOFF;
+    result.argument = "";
+  } else if (strncmp(p, "+A2DPCON", 8) == 0) {
+    result.command = AT_CMD_A2DPCON;
+    result.argument = p + 8;
+  } else if (strncmp(p, "+BTOFF", 6) == 0) {
+    result.command = AT_CMD_BTOFF;
+    result.argument = "";
+  } else if (strncmp(p, "+BTBOTH", 7) == 0) {
+    result.command = AT_CMD_BTBOTH;
+    result.argument = "";
   }
 
   return result;

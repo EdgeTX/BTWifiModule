@@ -75,6 +75,27 @@ void test_htreset(void)
   TEST_ASSERT_EQUAL(AT_CMD_HTRESET, r.command);
 }
 
+void test_bluetooth_control_commands(void)
+{
+  char ble_on[] = "AT+BLEON\r\n";
+  char ble_off[] = "AT+BLEOFF\r\n";
+  char a2dp_on[] = "AT+A2DPON\r\n";
+  char a2dp_off[] = "AT+A2DPOFF\r\n";
+  char a2dp_connect[] = "AT+A2DPCONAABBCCDDEEFF\r\n";
+  char bt_off[] = "AT+BTOFF\r\n";
+  char bt_both[] = "AT+BTBOTH\r\n";
+
+  TEST_ASSERT_EQUAL(AT_CMD_BLEON, at_command_parse(ble_on).command);
+  TEST_ASSERT_EQUAL(AT_CMD_BLEOFF, at_command_parse(ble_off).command);
+  TEST_ASSERT_EQUAL(AT_CMD_A2DPON, at_command_parse(a2dp_on).command);
+  TEST_ASSERT_EQUAL(AT_CMD_A2DPOFF, at_command_parse(a2dp_off).command);
+  at_command_parse_t connect_result = at_command_parse(a2dp_connect);
+  TEST_ASSERT_EQUAL(AT_CMD_A2DPCON, connect_result.command);
+  TEST_ASSERT_EQUAL_STRING("AABBCCDDEEFF", connect_result.argument);
+  TEST_ASSERT_EQUAL(AT_CMD_BTOFF, at_command_parse(bt_off).command);
+  TEST_ASSERT_EQUAL(AT_CMD_BTBOTH, at_command_parse(bt_both).command);
+}
+
 void test_unknown(void)
 {
   char line[] = "AT+BOGUS\r\n";
@@ -114,6 +135,7 @@ void run_at_command_tests(void)
   RUN_TEST(test_clear);
   RUN_TEST(test_baud_argument);
   RUN_TEST(test_htreset);
+  RUN_TEST(test_bluetooth_control_commands);
   RUN_TEST(test_unknown);
   RUN_TEST(test_trailing_whitespace_stripped);
   RUN_TEST(test_null_input);

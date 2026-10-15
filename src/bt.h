@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <stdbool.h>
+
 #include "bt_addr.h"
 
 // `esp_bd_addr_t` is provided by ESP-IDF under Bluedroid; under NimBLE it is
@@ -34,6 +36,12 @@ extern esp_bd_addr_t rmtbtaddress;
 
 /** Initialize the Bluetooth controller and host (BLE). */
 void bt_init(void);
+
+/** Initialize the Bluetooth controller and host for Classic Bluetooth. */
+void bt_classic_init(void);
+
+/** Return whether this build supports the Classic Bluetooth A2DP source. */
+bool bt_a2dp_supported(void);
 
 /** Disable and release the Bluetooth stack. */
 void bt_disable(void);

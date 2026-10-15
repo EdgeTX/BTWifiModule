@@ -9,6 +9,7 @@ idf_component_register(
         at_command.c
         bt.c
         bt_addr.c
+        bt_a2dp.c
         bt_client.c
         bt_server.c
         cb.c
