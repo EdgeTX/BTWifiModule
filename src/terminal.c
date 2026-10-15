@@ -119,6 +119,27 @@ static void write_fmt(const char *fmt, ...)
   uart_write_bytes(uart_num, reusablebuff, (size_t)len);
 }
 
+static void forward_radio_byte(uint8_t byte,
+                               uint8_t *pass_buffer,
+                               size_t *pass_length,
+                               uint8_t *pcm_buffer,
+                               size_t *pcm_length)
+{
+  if (curMode == ROLE_BLE_PERIPHERAL) {
+    pass_buffer[(*pass_length)++] = byte;
+    if (*pass_length >= PASSTHROUGH_BUF) {
+      bt_server_send_data(pass_buffer, (uint8_t)*pass_length);
+      *pass_length = 0;
+    }
+  } else if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+    pcm_buffer[(*pcm_length)++] = byte;
+    if (*pcm_length >= UART_RX_BUFFER) {
+      a2dp_feed_pcm(pcm_buffer, *pcm_length);
+      *pcm_length = 0;
+    }
+  }
+}
+
 /* ========================================================================== */
 /* EdgeTX announcements                                                       */
 /* ========================================================================== */
@@ -396,7 +417,11 @@ void runUARTHead(void *param)
 
   // Peripheral passthrough buffer (<= minimum ATT MTU payload).
   static uint8_t passBuf[PASSTHROUGH_BUF];
-  static uint8_t passLen = 0;
+  static size_t passLen = 0;
+  static uint8_t pcmBuf[UART_RX_BUFFER];
+  static size_t pcmLen = 0;
+  static uint8_t atPrefix[2];
+  static size_t atPrefixLen = 0;
 
   for (;;) {
     int cnt = uart_read_bytes(uart_num, data, UART_RX_BUFFER, 0);
@@ -418,31 +443,47 @@ void runUARTHead(void *param)
           parserATCommand(atcommand);
           atcommandlen = -1;
         }
-      } else {
-        // Detect the "AT+" prefix (EdgeTX always sends "AT+..."). Requiring the
-        // '+' avoids false positives from 'A','T' sequences in binary traffic.
-        static char lc1 = 0;
-        static char lc2 = 0;
-        if (lc2 == 'A' && lc1 == 'T' && c == '+') {
-          atcommandlen = 0;
-          atcommand[atcommandlen++] = '+';
-        } else if (curMode == ROLE_BLE_PERIPHERAL) {
-          // Forward the radio's telemetry/trainer traffic unchanged.
-          passBuf[passLen++] = c;
-          if (passLen >= sizeof(passBuf)) {
-            bt_server_send_data(passBuf, passLen);
-            passLen = 0;
+      } else if (atPrefixLen == 0) {
+        if (c == 'A') {
+          atPrefix[atPrefixLen++] = c;
+        } else {
+          forward_radio_byte(c, passBuf, &passLen, pcmBuf, &pcmLen);
+        }
+      } else if (atPrefixLen == 1) {
+        if (c == 'T') {
+          atPrefix[atPrefixLen++] = c;
+        } else {
+          forward_radio_byte(atPrefix[0], passBuf, &passLen, pcmBuf, &pcmLen);
+          atPrefixLen = 0;
+          if (c == 'A') {
+            atPrefix[atPrefixLen++] = c;
+          } else {
+            forward_radio_byte(c, passBuf, &passLen, pcmBuf, &pcmLen);
           }
         }
-        // In central/master the radio only sends AT commands; discard the rest.
-        lc2 = lc1;
-        lc1 = (char)c;
+      } else if (c == '+') {
+        atPrefixLen = 0;
+        atcommandlen = 0;
+        atcommand[atcommandlen++] = '+';
+      } else {
+        forward_radio_byte(atPrefix[0], passBuf, &passLen, pcmBuf, &pcmLen);
+        forward_radio_byte(atPrefix[1], passBuf, &passLen, pcmBuf, &pcmLen);
+        atPrefixLen = 0;
+        if (c == 'A') {
+          atPrefix[atPrefixLen++] = c;
+        } else {
+          forward_radio_byte(c, passBuf, &passLen, pcmBuf, &pcmLen);
+        }
       }
     }
 
     if (passLen > 0) {
-      bt_server_send_data(passBuf, passLen);
+      bt_server_send_data(passBuf, (uint8_t)passLen);
       passLen = 0;
+    }
+    if (pcmLen > 0) {
+      a2dp_feed_pcm(pcmBuf, pcmLen);
+      pcmLen = 0;
     }
 
     settings_process();

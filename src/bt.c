@@ -9,7 +9,7 @@
 
 #include "esp_bt.h"
 #if !defined(USE_NIMBLE) && defined(CONFIG_BT_CLASSIC_ENABLED)
-#include "esp_bt_device.h"
+#include "esp_gap_bt_api.h"
 #endif
 #include "esp_err.h"
 #include "esp_log.h"
@@ -176,7 +176,7 @@ void bt_set_name(const char *name)
   esp_err_t ret;
 #if defined(CONFIG_BT_CLASSIC_ENABLED)
   if (s_classic_mode) {
-    ret = esp_bt_dev_set_device_name(s_btname);
+    ret = esp_bt_gap_set_device_name(s_btname);
   } else
 #endif
   {

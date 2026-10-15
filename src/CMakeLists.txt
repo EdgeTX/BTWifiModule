@@ -7,6 +7,7 @@ idf_component_register(
     SRCS
         main.c
         at_command.c
+        audio_resampler.c
         bt.c
         bt_addr.c
         bt_a2dp.c
