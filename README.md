@@ -20,6 +20,7 @@ Documentation: https://btwifimod.gitbook.io/
 | Auto-connect to the last known device | Supported |
 | Device name from `AT+NAME` (persisted and advertised) | Supported |
 | Selectable BLE host: Bluedroid or NimBLE | Supported |
+| Classic A2DP audio source (Bluedroid, Classic-BT boards) | Supported |
 
 ## How telemetry works
 
@@ -114,14 +115,15 @@ doc/BENCH.md      Bench setup, procedure and validation status.
 PlatformIO (ESP-IDF). Two BLE hosts are selectable: Bluedroid (default) or
 NimBLE.
 
-**Supported targets** (app partition 1 MB):
+**Supported targets** (Bluedroid builds for Classic-Bluetooth boards also carry
+the A2DP source and use the 1.34 MB `pico_partitions.csv` app partition):
 
-| Environment | BLE host | Flash | Board |
-|---|---|---|---|
-| `C3SuperMini` | Bluedroid | ~84 % | ESP32-C3 SuperMini |
-| `C3SuperMini_nimble` | NimBLE | ~52 % | ESP32-C3 SuperMini |
-| `ESP32_DEV38P` | Bluedroid | ~86 % | ESP32-DEV-38P |
-| `ESP32_DEV38P_nimble` | NimBLE | ~53 % | ESP32-DEV-38P |
+| Environment | BLE host | App partition | Flash | Board |
+|---|---|---|---|---|
+| `C3SuperMini` | Bluedroid | 1 MB | ~84 % | ESP32-C3 SuperMini |
+| `C3SuperMini_nimble` | NimBLE | 1 MB | ~52 % | ESP32-C3 SuperMini |
+| `ESP32_DEV38P` | Bluedroid + A2DP | 1.34 MB | ~91 % | ESP32-DEV-38P |
+| `ESP32_DEV38P_nimble` | NimBLE | 1 MB | ~53 % | ESP32-DEV-38P |
 
 **Reference targets** (app partition 1.31 MB via `pico_partitions.csv`, not
 hardware-validated):
@@ -221,7 +223,11 @@ Responses: `OK+...`, `Central:<addr>`, `Peripheral:<addr>`, `Connected:<addr>`,
 AVRCP exposes a logical range of 0..127; it does not report the speaker's
 physical volume-detent count.
 
-A2DP is enabled in the RM Pico Bluedroid configuration, not the NimBLE build.
+A2DP is enabled in the Bluedroid configuration of every Classic-Bluetooth board
+(Radiomaster Pico and ESP32-DEV-38P) and never in the NimBLE build, which is
+BLE-only. On the ESP32-DEV-38P the AT link is UART2 (GPIO18 TX / GPIO19 RX) while
+logs stay on the CP2102 port (UART0), so A2DP is driven from a USB-UART adapter or
+the radio, not the log port.
 For a test without EdgeTX PCM input, build and flash `RM_pico_a2dp_test`; it
 streams a local 500 Hz tone. Connect to a discoverable sink with:
 

@@ -9,7 +9,10 @@ to repeat the same checks for each BLE host (Bluedroid and NimBLE).
 - ESP32-DEV-38P (ESP32 classic, `ESP32_DEV38P*`): radio UART on
   GPIO18 (TX) / GPIO19 (RX); logs on UART0 (its CP2102 bridge). Its auto-reset
   does not drive IO0, so enter download mode manually (hold BOOT, tap RESET)
-  before flashing.
+  before flashing. The Bluedroid build (`ESP32_DEV38P`) enables Bluetooth
+  Classic, so this single firmware provides both the BLE roles and the Classic
+  A2DP/AVRCP audio source; it uses the 1.34 MB `pico_partitions.csv` app
+  partition because the A2DP stack does not fit in the default 1 MB one.
 - Reference only (not validated): ESP32 Pico Kit (`pico32`, `pico32_nimble`,
   radio UART GPIO4 TX / GPIO5 RX) and Radiomaster Pico (`RM_pico`,
   `RM_pico_nimble`, radio UART GPIO1 TX / GPIO3 RX, console on UART1
@@ -117,6 +120,24 @@ Notes:
   headtracker reads about -80 dBm on the module and -56 dBm on the phone.
   Range is therefore limited by the module antenna.
 
+## Classic A2DP audio source (Bluedroid, Classic-BT boards)
+
+Available on `ESP32_DEV38P` (Classic Bluetooth) and `RM_pico`; never on NimBLE.
+
+1. Drive the AT link (for the ESP32-DEV-38P a USB-UART adapter on GPIO18/19, not
+   the CP2102 log port) and send the sequence
+   `AT+A2DPON`, `AT+DISC?`, `AT+A2DPCON<12-digit-address>`.
+2. Expect `OK+A2DPON`, then `OK+DISCS` / `OK+DISC:<addr>` per sink / `OK+DISCE`
+   from the inquiry, and finally a started media stream.
+3. Volume: `AT+A2DPVOL<n>` (0..127), `AT+A2DPVOL?` to query, and unsolicited
+   `A2DPVOL:<n>` lines when the sink changes the absolute volume.
+4. PCM path: send `AT+BAUD6` after connecting and feed mono 16-bit LE PCM at
+   16 kHz over the AT link (or use `tools/uart_audio_sender.py`).
+5. `AT+A2DPSTOP` / `AT+A2DPSTART` control playback; `AT+A2DPOFF` stops A2DP and
+   turns Bluetooth off.
+
+BLE and A2DP cannot run at the same time: enabling one stops the other.
+
 ## Expected values (telemetry)
 
 | Sensor       | Data ID | Sent value | Displayed     |
@@ -155,6 +176,7 @@ headtracker (no board-to-board master run):
 | AT command bench (16 checks)            | PASS      | PASS   |
 | Slave: telemetry to the phone app       | PASS      | PASS   |
 | Headtracker: detect + channels + reset  | PASS      | PASS   |
+| Classic A2DP source + AVRCP volume      | PASS      | n/a    |
 
 ## Automated battery
 
@@ -189,5 +211,12 @@ Last run (A = NimBLE, B = Bluedroid, headtracker at -84 dBm):
 - `AT+DISC?` now cancels any in-progress scan first, so it also completes
   while the module is auto-connecting (previously it returned `OK+DISCS` with
   no `OK+DISCE`).
+- `tools/uart_audio_sender.py` waits for an `A2DP media started` line after
+  `AT+A2DPCON`. The firmware only emits that string from the `AT+A2DPON` handler
+  and as an `A2DP` log line; on the ESP32-DEV-38P the logs go to the CP2102 port
+  (UART0), not the AT link (UART2), so the wait can time out even though media is
+  streaming. The audio path itself is fine: streaming owned PCM at 460800 after
+  `AT+BAUD6` plays correctly. The handshake is only reliable on the Radiomaster
+  Pico, where the console and the AT link share UART0.
 - Telemetry app: connection can drop right after connecting when the
   S.Port frames are invalid (fixed by the checksum in `tools/sport_sender.py`).
