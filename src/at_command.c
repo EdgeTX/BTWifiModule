@@ -74,6 +74,15 @@ at_command_parse_t at_command_parse(char *line)
   } else if (strncmp(p, "+A2DPCON", 8) == 0) {
     result.command = AT_CMD_A2DPCON;
     result.argument = p + 8;
+  } else if (strncmp(p, "+A2DPVOL", 8) == 0) {
+    result.command = AT_CMD_A2DPVOL;
+    result.argument = p + 8;
+  } else if (strncmp(p, "+A2DPSTART", 10) == 0) {
+    result.command = AT_CMD_A2DPSTART;
+    result.argument = "";
+  } else if (strncmp(p, "+A2DPSTOP", 9) == 0) {
+    result.command = AT_CMD_A2DPSTOP;
+    result.argument = "";
   } else if (strncmp(p, "+BTOFF", 6) == 0) {
     result.command = AT_CMD_BTOFF;
     result.argument = "";

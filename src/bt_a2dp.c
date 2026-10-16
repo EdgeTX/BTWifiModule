@@ -18,6 +18,7 @@
 #if defined(CONFIG_BT_CLASSIC_ENABLED) && defined(CONFIG_BT_A2DP_ENABLE)
 
 #include "esp_a2dp_api.h"
+#include "esp_avrc_api.h"
 #include "esp_gap_bt_api.h"
 
 #define A2DP_PCM_BUFFER_SIZE 8192
@@ -25,6 +26,7 @@
 #define A2DP_DISCOVERY_QUEUE_LENGTH 20
 #define A2DP_DISCOVERY_MAX_DEVICES 20
 #define A2DP_MEDIA_EVENT_QUEUE_LENGTH 8
+#define A2DP_VOLUME_EVENT_QUEUE_LENGTH 8
 #define A2DP_RECONNECT_DELAY_MS 5000
 #define A2DP_RECONNECT_TIMEOUT_MS 15000
 
@@ -33,12 +35,19 @@ typedef enum {
   A2DP_MEDIA_EVENT_CONNECTED,
   A2DP_MEDIA_EVENT_DISCONNECTED,
   A2DP_MEDIA_EVENT_CONTROL_ACK,
+  A2DP_MEDIA_EVENT_AVRCP_CONNECTED,
+  A2DP_MEDIA_EVENT_AVRCP_DISCONNECTED,
+  A2DP_MEDIA_EVENT_AVRCP_CAPABILITIES,
+  A2DP_MEDIA_EVENT_VOLUME_CHANGED,
 } a2dp_media_event_type_t;
 
 typedef struct {
   a2dp_media_event_type_t type;
   esp_a2d_media_ctrl_t command;
   esp_a2d_media_ctrl_ack_t status;
+  uint16_t avrcp_capabilities;
+  uint8_t volume;
+  bool register_volume_notification;
 } a2dp_media_event_t;
 
 typedef enum {
@@ -59,6 +68,7 @@ static uint8_t s_pending_output_byte;
 #endif
 static QueueHandle_t s_discovery_queue;
 static QueueHandle_t s_media_event_queue;
+static QueueHandle_t s_volume_event_queue;
 static SemaphoreHandle_t s_profile_deinit_sem;
 static volatile bool s_discovery_active;
 static volatile bool s_discovery_complete = true;
@@ -70,6 +80,10 @@ static esp_bd_addr_t s_peer_address;
 static bool s_peer_address_valid;
 static bool s_reconnect_pending;
 static TickType_t s_reconnect_deadline;
+static bool s_avrc_initialized;
+static bool s_avrc_connected;
+static bool s_avrc_volume_supported;
+static uint8_t s_avrc_transaction_label;
 static audio_resampler_t s_resampler;
 
 #if defined(A2DP_TEST_TONE)
@@ -218,6 +232,43 @@ static void a2dp_gap_event_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t
   }
 }
 
+static void a2dp_avrc_ct_event_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param)
+{
+  if (param == NULL || s_media_event_queue == NULL) {
+    return;
+  }
+
+  a2dp_media_event_t media_event = {0};
+  switch (event) {
+    case ESP_AVRC_CT_CONNECTION_STATE_EVT:
+      media_event.type = param->conn_stat.connected ? A2DP_MEDIA_EVENT_AVRCP_CONNECTED
+                                                    : A2DP_MEDIA_EVENT_AVRCP_DISCONNECTED;
+      break;
+    case ESP_AVRC_CT_GET_RN_CAPABILITIES_RSP_EVT:
+      media_event.type = A2DP_MEDIA_EVENT_AVRCP_CAPABILITIES;
+      media_event.avrcp_capabilities = param->get_rn_caps_rsp.evt_set.bits;
+      break;
+    case ESP_AVRC_CT_CHANGE_NOTIFY_EVT:
+      if (param->change_ntf.event_id != ESP_AVRC_RN_VOLUME_CHANGE) {
+        return;
+      }
+      media_event.type = A2DP_MEDIA_EVENT_VOLUME_CHANGED;
+      media_event.volume = param->change_ntf.event_parameter.volume;
+      media_event.register_volume_notification = true;
+      break;
+    case ESP_AVRC_CT_SET_ABSOLUTE_VOLUME_RSP_EVT:
+      media_event.type = A2DP_MEDIA_EVENT_VOLUME_CHANGED;
+      media_event.volume = param->set_volume_rsp.volume;
+      break;
+    default:
+      return;
+  }
+
+  if (xQueueSend(s_media_event_queue, &media_event, 0) != pdTRUE) {
+    ESP_LOGW(LOG_A2DP, "Dropping AVRCP event %d", event);
+  }
+}
+
 bool a2dp_init(const char *device_name)
 {
   if (s_profile_deinit_sem == NULL) {
@@ -235,7 +286,15 @@ bool a2dp_init(const char *device_name)
       return false;
     }
   }
+  if (s_volume_event_queue == NULL) {
+    s_volume_event_queue = xQueueCreate(A2DP_VOLUME_EVENT_QUEUE_LENGTH, sizeof(uint8_t));
+    if (s_volume_event_queue == NULL) {
+      ESP_LOGE(LOG_A2DP, "Failed to allocate AVRCP volume queue");
+      return false;
+    }
+  }
   xQueueReset(s_media_event_queue);
+  xQueueReset(s_volume_event_queue);
   s_media_state = A2DP_MEDIA_IDLE;
   s_audio_started = false;
   s_peer_address_valid = false;
@@ -270,18 +329,47 @@ bool a2dp_init(const char *device_name)
 
   if (esp_bt_gap_register_callback(a2dp_gap_event_cb) != ESP_OK ||
       esp_bt_gap_set_device_name(device_name) != ESP_OK ||
-      esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE) != ESP_OK ||
-      esp_a2d_register_callback(a2dp_event_cb) != ESP_OK ||
+      esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE) != ESP_OK) {
+    ESP_LOGE(LOG_A2DP, "Classic GAP initialization failed");
+    return false;
+  }
+
+  esp_err_t err = esp_avrc_ct_init();
+  if (err != ESP_OK) {
+    ESP_LOGE(LOG_A2DP, "AVRCP controller init failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  s_avrc_initialized = true;
+
+  err = esp_avrc_ct_register_callback(a2dp_avrc_ct_event_cb);
+  if (err != ESP_OK) {
+    ESP_LOGE(LOG_A2DP, "AVRCP callback registration failed: %s", esp_err_to_name(err));
+    esp_avrc_ct_deinit();
+    s_avrc_initialized = false;
+    return false;
+  }
+
+  if (esp_a2d_register_callback(a2dp_event_cb) != ESP_OK ||
       esp_a2d_source_register_data_callback(a2dp_data_cb) != ESP_OK ||
       esp_a2d_source_init() != ESP_OK) {
     ESP_LOGE(LOG_A2DP, "A2DP source init failed");
+    esp_avrc_ct_deinit();
+    s_avrc_initialized = false;
     return false;
   }
+
+  s_avrc_connected = false;
+  s_avrc_volume_supported = false;
+  s_avrc_transaction_label = 0;
   return true;
 }
 
 void a2dp_deinit(void)
 {
+  if (s_avrc_initialized) {
+    esp_avrc_ct_deinit();
+    s_avrc_initialized = false;
+  }
   if (s_profile_deinit_sem != NULL) {
     xSemaphoreTake(s_profile_deinit_sem, 0);
   }
@@ -296,10 +384,15 @@ void a2dp_deinit(void)
 
   s_media_state = A2DP_MEDIA_IDLE;
   s_audio_started = false;
+  s_avrc_connected = false;
+  s_avrc_volume_supported = false;
   s_peer_address_valid = false;
   s_reconnect_pending = false;
   if (s_media_event_queue != NULL) {
     xQueueReset(s_media_event_queue);
+  }
+  if (s_volume_event_queue != NULL) {
+    xQueueReset(s_volume_event_queue);
   }
 }
 
@@ -413,6 +506,57 @@ void a2dp_process(void)
           }
         }
         break;
+
+      case A2DP_MEDIA_EVENT_AVRCP_CONNECTED:
+        s_avrc_connected = true;
+        s_avrc_volume_supported = false;
+        if (s_avrc_initialized) {
+          esp_err_t err = esp_avrc_ct_send_get_rn_capabilities_cmd(s_avrc_transaction_label++ &
+                                                                   ESP_AVRC_TRANS_LABEL_MAX);
+          if (err != ESP_OK) {
+            ESP_LOGW(LOG_A2DP, "AVRCP capabilities request failed: %s", esp_err_to_name(err));
+          }
+        }
+        break;
+
+      case A2DP_MEDIA_EVENT_AVRCP_DISCONNECTED:
+        s_avrc_connected = false;
+        s_avrc_volume_supported = false;
+        break;
+
+      case A2DP_MEDIA_EVENT_AVRCP_CAPABILITIES: {
+        esp_avrc_rn_evt_cap_mask_t capabilities = {.bits = event.avrcp_capabilities};
+        s_avrc_volume_supported = esp_avrc_rn_evt_bit_mask_operation(
+            ESP_AVRC_BIT_MASK_OP_TEST, &capabilities, ESP_AVRC_RN_VOLUME_CHANGE);
+        if (s_avrc_volume_supported) {
+          esp_err_t err = esp_avrc_ct_send_register_notification_cmd(
+              s_avrc_transaction_label++ & ESP_AVRC_TRANS_LABEL_MAX,
+              ESP_AVRC_RN_VOLUME_CHANGE, 0);
+          if (err != ESP_OK) {
+            ESP_LOGW(LOG_A2DP, "AVRCP volume notification registration failed: %s",
+                     esp_err_to_name(err));
+          }
+        } else {
+          ESP_LOGW(LOG_A2DP, "A2DP sink does not support AVRCP volume notifications");
+        }
+        break;
+      }
+
+      case A2DP_MEDIA_EVENT_VOLUME_CHANGED:
+        if (s_volume_event_queue != NULL &&
+            xQueueSend(s_volume_event_queue, &event.volume, 0) != pdTRUE) {
+          ESP_LOGW(LOG_A2DP, "Dropping AVRCP volume update");
+        }
+        if (event.register_volume_notification && s_avrc_connected && s_avrc_volume_supported) {
+          esp_err_t err = esp_avrc_ct_send_register_notification_cmd(
+              s_avrc_transaction_label++ & ESP_AVRC_TRANS_LABEL_MAX,
+              ESP_AVRC_RN_VOLUME_CHANGE, 0);
+          if (err != ESP_OK) {
+            ESP_LOGW(LOG_A2DP, "AVRCP volume notification re-registration failed: %s",
+                     esp_err_to_name(err));
+          }
+        }
+        break;
     }
   }
 
@@ -447,6 +591,61 @@ void a2dp_process(void)
 bool a2dp_media_started(void)
 {
   return s_audio_started;
+}
+
+bool a2dp_set_volume(uint8_t volume)
+{
+  if (!s_avrc_initialized || !s_avrc_connected || volume > 0x7f) {
+    return false;
+  }
+
+  esp_err_t err = esp_avrc_ct_send_set_absolute_volume_cmd(
+      s_avrc_transaction_label++ & ESP_AVRC_TRANS_LABEL_MAX, volume);
+  if (err != ESP_OK) {
+    ESP_LOGW(LOG_A2DP, "AVRCP set volume failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
+static bool a2dp_send_passthrough(esp_avrc_pt_cmd_t command)
+{
+  if (!s_avrc_initialized || !s_avrc_connected) {
+    return false;
+  }
+
+  uint8_t transaction_label = s_avrc_transaction_label++ & ESP_AVRC_TRANS_LABEL_MAX;
+  esp_err_t err = esp_avrc_ct_send_passthrough_cmd(
+      transaction_label, command, ESP_AVRC_PT_CMD_STATE_PRESSED);
+  if (err != ESP_OK) {
+    ESP_LOGW(LOG_A2DP, "AVRCP key press failed: %s", esp_err_to_name(err));
+    return false;
+  }
+
+  transaction_label = s_avrc_transaction_label++ & ESP_AVRC_TRANS_LABEL_MAX;
+  err = esp_avrc_ct_send_passthrough_cmd(
+      transaction_label, command, ESP_AVRC_PT_CMD_STATE_RELEASED);
+  if (err != ESP_OK) {
+    ESP_LOGW(LOG_A2DP, "AVRCP key release failed: %s", esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
+bool a2dp_play(void)
+{
+  return a2dp_send_passthrough(ESP_AVRC_PT_CMD_PLAY);
+}
+
+bool a2dp_stop(void)
+{
+  return a2dp_send_passthrough(ESP_AVRC_PT_CMD_STOP);
+}
+
+bool a2dp_get_volume_update(uint8_t *volume)
+{
+  return volume != NULL && s_volume_event_queue != NULL &&
+         xQueueReceive(s_volume_event_queue, volume, 0) == pdTRUE;
 }
 
 bool bt_a2dp_start_discovery(void)
@@ -505,6 +704,10 @@ void a2dp_feed_pcm(const uint8_t *data, size_t length)
 }
 void a2dp_process(void) {}
 bool a2dp_media_started(void) { return false; }
+bool a2dp_set_volume(uint8_t volume) { (void)volume; return false; }
+bool a2dp_play(void) { return false; }
+bool a2dp_stop(void) { return false; }
+bool a2dp_get_volume_update(uint8_t *volume) { (void)volume; return false; }
 bool bt_a2dp_start_discovery(void) { return false; }
 bool bt_a2dp_get_discovery_result(bt_addr_t address) { (void)address; return false; }
 bool bt_a2dp_discovery_complete(void) { return true; }

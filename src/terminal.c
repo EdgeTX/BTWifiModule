@@ -15,6 +15,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <driver/uart.h>
@@ -361,6 +362,43 @@ static void parserATCommand(char *line)
       if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
         write_str("OK+A2DPCON\r\n");
         a2dp_connect(cmd.argument);
+      } else {
+        write_str("ERROR\r\n");
+      }
+      break;
+
+    case AT_CMD_A2DPVOL:
+      if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+        if (strcmp(cmd.argument, "?") == 0) {
+          write_str("OK+A2DPVOL:128\r\n");
+          break;
+        }
+
+        char *end = NULL;
+        long volume = strtol(cmd.argument, &end, 10);
+        if (end == cmd.argument || *end != '\0' || volume < 0 || volume > 127) {
+          write_str("ERROR\r\n");
+        } else if (a2dp_set_volume((uint8_t)volume)) {
+          write_fmt("OK+A2DPVOL:%u\r\n", (unsigned)volume);
+        } else {
+          write_str("ERROR\r\n");
+        }
+      } else {
+        write_str("ERROR\r\n");
+      }
+      break;
+
+    case AT_CMD_A2DPSTART:
+      if (curMode == ROLE_BTEDR_AUDIO_SOURCE && a2dp_play()) {
+        write_str("OK+A2DPSTART\r\n");
+      } else {
+        write_str("ERROR\r\n");
+      }
+      break;
+
+    case AT_CMD_A2DPSTOP:
+      if (curMode == ROLE_BTEDR_AUDIO_SOURCE && a2dp_stop()) {
+        write_str("OK+A2DPSTOP\r\n");
       } else {
         write_str("ERROR\r\n");
       }
@@ -718,8 +756,12 @@ static void runBT(void)
     case ROLE_BLE_PERIPHERAL:
       runBTPeripherial();
       break;
-    case ROLE_BTEDR_AUDIO_SOURCE:
+    case ROLE_BTEDR_AUDIO_SOURCE: {
       a2dp_process();
+      uint8_t volume;
+      while (a2dp_get_volume_update(&volume)) {
+        write_fmt("A2DPVOL:%u\r\n", (unsigned)volume);
+      }
       if (a2dpScanActive) {
         bt_addr_t address;
         while (bt_a2dp_get_discovery_result(address)) {
@@ -732,6 +774,7 @@ static void runBT(void)
         }
       }
       break;
+    }
     default:
       break;
   }

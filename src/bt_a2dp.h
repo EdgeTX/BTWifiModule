@@ -28,6 +28,18 @@ void a2dp_process(void);
 /** Return whether the A2DP media channel is currently started. */
 bool a2dp_media_started(void);
 
+/** Set the AVRCP absolute volume, in the range 0..127. */
+bool a2dp_set_volume(uint8_t volume);
+
+/** Send AVRCP play to the connected A2DP sink. */
+bool a2dp_play(void);
+
+/** Send AVRCP stop to the connected A2DP sink. */
+bool a2dp_stop(void);
+
+/** Read one absolute-volume update received from the A2DP sink without blocking. */
+bool a2dp_get_volume_update(uint8_t *volume);
+
 /** Start a Classic Bluetooth inquiry while the A2DP role is active. */
 bool bt_a2dp_start_discovery(void);
 

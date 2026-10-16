@@ -208,13 +208,18 @@ module:
 | `AT+A2DPON` | enable the Classic Bluetooth A2DP source |
 | `AT+A2DPCON<addr>` | connect to an A2DP sink (12 hex digits, no separators) |
 | `AT+A2DPOFF` | stop A2DP and turn Bluetooth off |
+| `AT+A2DPVOL<n>` | set AVRCP absolute volume (0..127) |
+| `AT+A2DPVOL?` | query AVRCP's 128 logical volume values |
+| `AT+A2DPSTART` / `AT+A2DPSTOP` | play or stop the A2DP sink |
 | `AT+BLEON` / `AT+BLEOFF` | enable the last BLE role / disable BLE |
 | `AT+BTOFF` | turn Bluetooth off |
 | `AT+CLEAR` | forget the saved device |
 | `AT+HTRESET` | reset the headtracker (BTWifiModule extension) |
 
 Responses: `OK+...`, `Central:<addr>`, `Peripheral:<addr>`, `Connected:<addr>`,
-`DisConnected`, `ERROR`.
+`DisConnected`, `A2DPVOL:<n>` (unsolicited sink volume update, 0..127), `ERROR`.
+AVRCP exposes a logical range of 0..127; it does not report the speaker's
+physical volume-detent count.
 
 A2DP is enabled in the RM Pico Bluedroid configuration, not the NimBLE build.
 For a test without EdgeTX PCM input, build and flash `RM_pico_a2dp_test`; it

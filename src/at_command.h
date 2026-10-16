@@ -32,6 +32,9 @@ typedef enum {
   AT_CMD_A2DPCON,
   AT_CMD_BTOFF,
   AT_CMD_BTBOTH,
+  AT_CMD_A2DPVOL,
+  AT_CMD_A2DPSTART,
+  AT_CMD_A2DPSTOP,
 } at_command_t;
 
 /** Result of parsing an AT line. */

@@ -88,6 +88,10 @@ void test_bluetooth_control_commands(void)
   char a2dp_connect[] = "AT+A2DPCONAABBCCDDEEFF\r\n";
   char bt_off[] = "AT+BTOFF\r\n";
   char bt_both[] = "AT+BTBOTH\r\n";
+  char volume[] = "AT+A2DPVOL87\r\n";
+  char volume_query[] = "AT+A2DPVOL?\r\n";
+  char a2dp_start[] = "AT+A2DPSTART\r\n";
+  char a2dp_stop[] = "AT+A2DPSTOP\r\n";
 
   TEST_ASSERT_EQUAL(AT_CMD_BLEON, at_command_parse(ble_on).command);
   TEST_ASSERT_EQUAL(AT_CMD_BLEOFF, at_command_parse(ble_off).command);
@@ -98,6 +102,14 @@ void test_bluetooth_control_commands(void)
   TEST_ASSERT_EQUAL_STRING("AABBCCDDEEFF", connect_result.argument);
   TEST_ASSERT_EQUAL(AT_CMD_BTOFF, at_command_parse(bt_off).command);
   TEST_ASSERT_EQUAL(AT_CMD_BTBOTH, at_command_parse(bt_both).command);
+  at_command_parse_t volume_result = at_command_parse(volume);
+  TEST_ASSERT_EQUAL(AT_CMD_A2DPVOL, volume_result.command);
+  TEST_ASSERT_EQUAL_STRING("87", volume_result.argument);
+  at_command_parse_t volume_query_result = at_command_parse(volume_query);
+  TEST_ASSERT_EQUAL(AT_CMD_A2DPVOL, volume_query_result.command);
+  TEST_ASSERT_EQUAL_STRING("?", volume_query_result.argument);
+  TEST_ASSERT_EQUAL(AT_CMD_A2DPSTART, at_command_parse(a2dp_start).command);
+  TEST_ASSERT_EQUAL(AT_CMD_A2DPSTOP, at_command_parse(a2dp_stop).command);
 }
 
 void test_unknown(void)

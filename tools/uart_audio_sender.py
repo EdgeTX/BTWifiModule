@@ -9,6 +9,8 @@ A2DP setup commands at 115200 baud, switches to 460800 for PCM, and restores
 """
 
 import argparse
+import queue
+import threading
 import time
 import wave
 
@@ -24,6 +26,31 @@ SAMPLE_RATE = 16000
 SAMPLE_WIDTH_BYTES = 2
 PREBUFFER_FRAMES = 2048
 FRAMES_PER_CHUNK = 2048
+VOLUME_MAX = 127
+VOLUME_STEP = 8
+
+
+def start_volume_input(commands):
+    """Read stdin lines (0..127, '+' or '-') and queue AT+A2DPVOL commands."""
+    def worker():
+        volume = VOLUME_MAX // 2
+        print(f"Volume control: type 0-{VOLUME_MAX}, '+' or '-' then Enter")
+        while True:
+            try:
+                line = input().strip()
+            except EOFError:
+                return
+            if line == "+":
+                volume = min(VOLUME_MAX, volume + VOLUME_STEP)
+            elif line == "-":
+                volume = max(0, volume - VOLUME_STEP)
+            elif line.isdigit() and int(line) <= VOLUME_MAX:
+                volume = int(line)
+            else:
+                continue
+            commands.put(b"AT+A2DPVOL%d\r\n" % volume)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def read_until(port, token, timeout, show_output=True):
@@ -74,7 +101,7 @@ def find_control_baud(port):
     raise TimeoutError("No A2DP response at 115200 or 460800 baud; reset the module")
 
 
-def stream_wav(port, audio):
+def stream_wav(port, audio, commands):
     total_frames = audio.getnframes()
     prebuffer_frames = min(PREBUFFER_FRAMES, total_frames)
     sent_frames = prebuffer_frames
@@ -89,14 +116,32 @@ def stream_wav(port, audio):
         if written != len(data):
             raise serial.SerialTimeoutException("UART write was incomplete")
 
+        # Sent between PCM chunks so the command is not interleaved with audio bytes.
+        while True:
+            try:
+                port.write(commands.get_nowait())
+            except queue.Empty:
+                break
+
         sent_frames += len(data) // SAMPLE_WIDTH_BYTES
         deadline = start_time + sent_frames / SAMPLE_RATE
-        delay = deadline - time.monotonic()
-        if delay > 0:
-            time.sleep(delay)
+        while True:
+            drain_uart(port)
+            delay = deadline - time.monotonic()
+            if delay <= 0:
+                break
+            time.sleep(min(delay, 0.02))
 
     port.flush()
+    drain_uart(port)
     print(f"\nSent {sent_frames}/{total_frames} PCM frames")
+
+
+def drain_uart(port):
+    while port.in_waiting:
+        data = port.read(min(port.in_waiting, 512))
+        if data:
+            print(data.decode("ascii", "replace"), end="", flush=True)
 
 
 def send_prebuffer(port, audio):
@@ -178,7 +223,9 @@ def main():
                 read_until(port, b"A2DP media started", 30)
 
             print(f"Streaming {args.wav} at {AUDIO_BAUD} baud")
-            stream_wav(port, audio)
+            commands = queue.Queue()
+            start_volume_input(commands)
+            stream_wav(port, audio, commands)
     except (OSError, ValueError, wave.Error, serial.SerialException, TimeoutError) as exc:
         parser.error(str(exc))
     finally:
