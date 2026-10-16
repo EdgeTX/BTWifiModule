@@ -228,6 +228,32 @@ AT+A2DPCON<12-digit-address>
 
 After the connection is established, send `AT+BAUD6` before transmitting PCM.
 To return to the normal radio link speed, send `AT+BAUD4` at 460800 baud.
+For PC-fed audio, install `pyserial` on Windows:
+
+```powershell
+py -m pip install pyserial
+```
+
+Prepare a mono, 16-bit PCM WAV at 16 kHz. If needed, convert an audio file with
+FFmpeg:
+
+```powershell
+ffmpeg -i input.mp3 -ac 1 -ar 16000 -c:a pcm_s16le audio.wav
+```
+
+Flash the normal `RM_pico` firmware (not `RM_pico_a2dp_test`, which uses its
+internal tone), close PuTTY, then run the sender. It probes at 115200 and
+460800, resets and restarts the A2DP stack, and restores 115200 if it detects a
+460800 session. It defaults to COM4 and the sink MAC `FC58FAACAA1A`:
+
+```powershell
+py tools\uart_audio_sender.py audio.wav
+```
+
+Override either default with `--port` or `--address`. The sender switches the
+module and PC to 460800, verifies the new rate, and prebuffers audio before
+connecting. It returns both sides to 115200 when playback ends. If neither baud
+probe receives a response, reset the module and retry.
 
 ## Credits
 

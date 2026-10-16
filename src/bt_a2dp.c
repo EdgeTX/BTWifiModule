@@ -9,7 +9,9 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
+#include "freertos/task.h"
 
 #define LOG_A2DP "A2DP"
 
@@ -23,8 +25,11 @@
 #define A2DP_DISCOVERY_QUEUE_LENGTH 20
 #define A2DP_DISCOVERY_MAX_DEVICES 20
 #define A2DP_MEDIA_EVENT_QUEUE_LENGTH 8
+#define A2DP_RECONNECT_DELAY_MS 5000
+#define A2DP_RECONNECT_TIMEOUT_MS 15000
 
 typedef enum {
+  A2DP_MEDIA_EVENT_CONNECTING,
   A2DP_MEDIA_EVENT_CONNECTED,
   A2DP_MEDIA_EVENT_DISCONNECTED,
   A2DP_MEDIA_EVENT_CONTROL_ACK,
@@ -54,11 +59,17 @@ static uint8_t s_pending_output_byte;
 #endif
 static QueueHandle_t s_discovery_queue;
 static QueueHandle_t s_media_event_queue;
+static SemaphoreHandle_t s_profile_deinit_sem;
 static volatile bool s_discovery_active;
 static volatile bool s_discovery_complete = true;
 static esp_bd_addr_t s_seen_devices[A2DP_DISCOVERY_MAX_DEVICES];
 static size_t s_seen_device_count;
 static a2dp_media_state_t s_media_state;
+static volatile bool s_audio_started;
+static esp_bd_addr_t s_peer_address;
+static bool s_peer_address_valid;
+static bool s_reconnect_pending;
+static TickType_t s_reconnect_deadline;
 static audio_resampler_t s_resampler;
 
 #if defined(A2DP_TEST_TONE)
@@ -137,12 +148,23 @@ static void a2dp_event_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
     return;
   }
 
+  if (event == ESP_A2D_PROF_STATE_EVT) {
+    if (param->a2d_prof_stat.init_state == ESP_A2D_DEINIT_SUCCESS &&
+        s_profile_deinit_sem != NULL) {
+      xSemaphoreGive(s_profile_deinit_sem);
+    }
+    return;
+  }
+
   a2dp_media_event_t media_event = {0};
   if (event == ESP_A2D_CONNECTION_STATE_EVT) {
     ESP_LOGI(LOG_A2DP, "Connection state %d", param->conn_stat.state);
-    if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
+    if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTING) {
+      media_event.type = A2DP_MEDIA_EVENT_CONNECTING;
+    } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
       media_event.type = A2DP_MEDIA_EVENT_CONNECTED;
     } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+      s_audio_started = false;
       media_event.type = A2DP_MEDIA_EVENT_DISCONNECTED;
     } else {
       return;
@@ -153,6 +175,7 @@ static void a2dp_event_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
     media_event.status = param->media_ctrl_stat.status;
   } else if (event == ESP_A2D_AUDIO_STATE_EVT) {
     ESP_LOGI(LOG_A2DP, "Audio state %d", param->audio_stat.state);
+    s_audio_started = param->audio_stat.state == ESP_A2D_AUDIO_STATE_STARTED;
     return;
   } else {
     return;
@@ -197,6 +220,14 @@ static void a2dp_gap_event_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t
 
 bool a2dp_init(const char *device_name)
 {
+  if (s_profile_deinit_sem == NULL) {
+    s_profile_deinit_sem = xSemaphoreCreateBinary();
+    if (s_profile_deinit_sem == NULL) {
+      ESP_LOGE(LOG_A2DP, "Failed to allocate profile deinit semaphore");
+      return false;
+    }
+  }
+
   if (s_media_event_queue == NULL) {
     s_media_event_queue = xQueueCreate(A2DP_MEDIA_EVENT_QUEUE_LENGTH, sizeof(a2dp_media_event_t));
     if (s_media_event_queue == NULL) {
@@ -206,6 +237,9 @@ bool a2dp_init(const char *device_name)
   }
   xQueueReset(s_media_event_queue);
   s_media_state = A2DP_MEDIA_IDLE;
+  s_audio_started = false;
+  s_peer_address_valid = false;
+  s_reconnect_pending = false;
 
   if (s_discovery_queue == NULL) {
     s_discovery_queue = xQueueCreate(A2DP_DISCOVERY_QUEUE_LENGTH, sizeof(esp_bd_addr_t));
@@ -248,8 +282,22 @@ bool a2dp_init(const char *device_name)
 
 void a2dp_deinit(void)
 {
-  esp_a2d_source_deinit();
+  if (s_profile_deinit_sem != NULL) {
+    xSemaphoreTake(s_profile_deinit_sem, 0);
+  }
+
+  esp_err_t err = esp_a2d_source_deinit();
+  if (err == ESP_OK && s_profile_deinit_sem != NULL &&
+      xSemaphoreTake(s_profile_deinit_sem, pdMS_TO_TICKS(3000)) != pdTRUE) {
+    ESP_LOGW(LOG_A2DP, "Timed out waiting for A2DP profile deinit");
+  } else if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(LOG_A2DP, "A2DP profile deinit failed: %s", esp_err_to_name(err));
+  }
+
   s_media_state = A2DP_MEDIA_IDLE;
+  s_audio_started = false;
+  s_peer_address_valid = false;
+  s_reconnect_pending = false;
   if (s_media_event_queue != NULL) {
     xQueueReset(s_media_event_queue);
   }
@@ -262,7 +310,16 @@ void a2dp_connect(const char *addr)
     return;
   }
   bt_addr_from_str(address, addr);
-  esp_a2d_source_connect(address);
+  memcpy(s_peer_address, address, sizeof(s_peer_address));
+  s_peer_address_valid = true;
+  s_reconnect_pending = false;
+
+  esp_err_t err = esp_a2d_source_connect(s_peer_address);
+  if (err != ESP_OK) {
+    ESP_LOGW(LOG_A2DP, "A2DP connect request failed: %s", esp_err_to_name(err));
+    s_reconnect_pending = true;
+    s_reconnect_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(A2DP_RECONNECT_DELAY_MS);
+  }
 }
 
 void a2dp_feed_pcm(const uint8_t *data, size_t length)
@@ -319,12 +376,21 @@ void a2dp_process(void)
   a2dp_media_event_t event;
   while (xQueueReceive(s_media_event_queue, &event, 0) == pdTRUE) {
     switch (event.type) {
+      case A2DP_MEDIA_EVENT_CONNECTING:
+        s_reconnect_pending = false;
+        break;
+
       case A2DP_MEDIA_EVENT_CONNECTED:
+        s_reconnect_pending = false;
         s_media_state = A2DP_MEDIA_CHECK_PENDING;
         break;
 
       case A2DP_MEDIA_EVENT_DISCONNECTED:
         s_media_state = A2DP_MEDIA_IDLE;
+        if (s_peer_address_valid) {
+          s_reconnect_pending = true;
+          s_reconnect_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(A2DP_RECONNECT_DELAY_MS);
+        }
         break;
 
       case A2DP_MEDIA_EVENT_CONTROL_ACK:
@@ -367,6 +433,20 @@ void a2dp_process(void)
       s_media_state = A2DP_MEDIA_IDLE;
     }
   }
+
+  if (s_peer_address_valid && s_reconnect_pending &&
+      (int32_t)(xTaskGetTickCount() - s_reconnect_deadline) >= 0) {
+    ESP_LOGW(LOG_A2DP, "Reconnecting to previous A2DP sink");
+    esp_err_t err = esp_a2d_source_connect(s_peer_address);
+    s_reconnect_deadline = xTaskGetTickCount() +
+                           pdMS_TO_TICKS(err == ESP_OK ? A2DP_RECONNECT_TIMEOUT_MS
+                                                      : A2DP_RECONNECT_DELAY_MS);
+  }
+}
+
+bool a2dp_media_started(void)
+{
+  return s_audio_started;
 }
 
 bool bt_a2dp_start_discovery(void)
@@ -424,6 +504,7 @@ void a2dp_feed_pcm(const uint8_t *data, size_t length)
   (void)length;
 }
 void a2dp_process(void) {}
+bool a2dp_media_started(void) { return false; }
 bool bt_a2dp_start_discovery(void) { return false; }
 bool bt_a2dp_get_discovery_result(bt_addr_t address) { (void)address; return false; }
 bool bt_a2dp_discovery_complete(void) { return true; }

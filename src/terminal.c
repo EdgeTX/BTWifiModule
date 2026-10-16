@@ -300,10 +300,8 @@ static void parserATCommand(char *line)
         break;
       }
 
-      esp_err_t ret = uart_wait_tx_done(uart_num, pdMS_TO_TICKS(1000));
-      if (ret == ESP_OK) {
-        ret = uart_set_baudrate(uart_num, baud_rate);
-      }
+      ESP_LOGI(LOG_UART, "Switching UART baud to %u", (unsigned)baud_rate);
+      esp_err_t ret = uart_set_baudrate(uart_num, baud_rate);
       if (ret != ESP_OK) {
         ESP_LOGE(LOG_UART, "Unable to switch UART baud to %u: %s", (unsigned)baud_rate,
                  esp_err_to_name(ret));
@@ -342,6 +340,9 @@ static void parserATCommand(char *line)
         write_str("OK+A2DPON\r\n");
         setRole(ROLE_BTEDR_AUDIO_SOURCE);
         sendBTMode();
+        if (curMode == ROLE_BTEDR_AUDIO_SOURCE && a2dp_media_started()) {
+          write_str("A2DP media started\r\n");
+        }
       } else {
         ESP_LOGE(LOG_UART, "A2DP not supported in this build");
         write_str("ERROR\r\n");

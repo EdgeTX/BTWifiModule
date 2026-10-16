@@ -9,7 +9,7 @@
 /** Initialize the Classic Bluetooth A2DP source with the configured name. */
 bool a2dp_init(const char *device_name);
 
-/** Stop the A2DP source. */
+/** Stop the A2DP source and wait for profile teardown before controller shutdown. */
 void a2dp_deinit(void);
 
 /** Connect to a remote device specified as 12 hexadecimal digits. */
@@ -24,6 +24,9 @@ void a2dp_feed_pcm(const uint8_t *data, size_t length);
 
 /** Process A2DP events and start the media stream when the connection is ready. */
 void a2dp_process(void);
+
+/** Return whether the A2DP media channel is currently started. */
+bool a2dp_media_started(void);
 
 /** Start a Classic Bluetooth inquiry while the A2DP role is active. */
 bool bt_a2dp_start_discovery(void);
