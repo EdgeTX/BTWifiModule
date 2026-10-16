@@ -15,6 +15,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <driver/uart.h>
@@ -23,6 +24,7 @@
 #include "board.h"
 #include "bt.h"
 #include "bt_addr.h"
+#include "bt_a2dp.h"
 #include "bt_client.h"
 #include "bt_server.h"
 #include "cb.h"
@@ -66,6 +68,8 @@ typedef enum {
 static role_t curMode = ROLE_UNKNOWN;
 static btcentralstate btCentralState = CENTRAL_STATE_DISCONNECT;
 static btperipheralstate btPeripherialState = PERIPHERIAL_STATE_DISCONNECTED;
+static role_t lastBleRole = ROLE_UNKNOWN;
+static bool a2dpScanActive;
 
 /** Current remote address (text) and the reusable response buffer. */
 static char rmtaddress[BT_ADDR_STR_LEN] = "000000000000";
@@ -76,6 +80,22 @@ static int laddcnt = 0;
 
 static void runBT(void);
 static void setRole(role_t role);
+
+static const char *role_name(role_t role)
+{
+  switch (role) {
+    case ROLE_BLE_PERIPHERAL:
+      return "BLE Peripheral";
+    case ROLE_BLE_CENTRAL:
+      return "BLE Central";
+    case ROLE_BTEDR_AUDIO_SOURCE:
+      return "A2DP Source";
+    case ROLE_BT_OFF:
+      return "Bluetooth Off";
+    default:
+      return "Unknown";
+  }
+}
 
 /* ========================================================================== */
 /* UART output helpers                                                        */
@@ -101,6 +121,27 @@ static void write_fmt(const char *fmt, ...)
   uart_write_bytes(uart_num, reusablebuff, (size_t)len);
 }
 
+static void forward_radio_byte(uint8_t byte,
+                               uint8_t *pass_buffer,
+                               size_t *pass_length,
+                               uint8_t *pcm_buffer,
+                               size_t *pcm_length)
+{
+  if (curMode == ROLE_BLE_PERIPHERAL) {
+    pass_buffer[(*pass_length)++] = byte;
+    if (*pass_length >= PASSTHROUGH_BUF) {
+      bt_server_send_data(pass_buffer, (uint8_t)*pass_length);
+      *pass_length = 0;
+    }
+  } else if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+    pcm_buffer[(*pcm_length)++] = byte;
+    if (*pcm_length >= UART_RX_BUFFER) {
+      a2dp_feed_pcm(pcm_buffer, *pcm_length);
+      *pcm_length = 0;
+    }
+  }
+}
+
 /* ========================================================================== */
 /* EdgeTX announcements                                                       */
 /* ========================================================================== */
@@ -115,6 +156,8 @@ static void sendBTMode(void)
     write_fmt("Peripheral:%s\r\n", lcladdress);
   } else if (curMode == ROLE_BLE_CENTRAL) {
     write_fmt("Central:%s\r\n", lcladdress);
+  } else {
+    write_fmt("Mode:%s\r\n", role_name(curMode));
   }
 }
 
@@ -228,6 +271,13 @@ static void parserATCommand(char *line)
         write_str("OK+DISCS\r\n");
         laddcnt = 0;
         btCentralState = CENTRAL_STATE_SCAN_START;
+      } else if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+        if (bt_a2dp_start_discovery()) {
+          a2dpScanActive = true;
+          write_str("OK+DISCS\r\n");
+        } else {
+          write_str("ERROR\r\n");
+        }
       }
       break;
 
@@ -240,11 +290,25 @@ static void parserATCommand(char *line)
       }
       break;
 
-    case AT_CMD_BAUD:
-      // The firmware stays at 115200 (see board.h). EdgeTX switches to 115200
-      // after AT+BAUD4 without checking a response.
-      ESP_LOGI(LOG_UART, "Baud change requested (ignored, staying at 115200)");
+    case AT_CMD_BAUD: {
+      uint32_t baud_rate;
+      if (strcmp(cmd.argument, "4") == 0) {
+        baud_rate = BAUD_DEFAULT;
+      } else if (strcmp(cmd.argument, "6") == 0) {
+        baud_rate = BAUD_A2DP_PCM;
+      } else {
+        ESP_LOGW(LOG_UART, "Unsupported baud level: %s", cmd.argument);
+        break;
+      }
+
+      ESP_LOGI(LOG_UART, "Switching UART baud to %u", (unsigned)baud_rate);
+      esp_err_t ret = uart_set_baudrate(uart_num, baud_rate);
+      if (ret != ESP_OK) {
+        ESP_LOGE(LOG_UART, "Unable to switch UART baud to %u: %s", (unsigned)baud_rate,
+                 esp_err_to_name(ret));
+      }
       break;
+    }
 
     case AT_CMD_HTRESET:
       if (bt_client_board_type == BLE_BOARD_HEADTRACKER) {
@@ -254,6 +318,101 @@ static void parserATCommand(char *line)
       } else {
         write_str("ERROR");
       }
+      break;
+
+    case AT_CMD_BLEON: {
+      role_t role = lastBleRole == ROLE_BLE_PERIPHERAL ? ROLE_BLE_PERIPHERAL : ROLE_BLE_CENTRAL;
+      write_str("OK+BLEON\r\n");
+      setRole(role);
+      sendBTMode();
+      break;
+    }
+
+    case AT_CMD_BLEOFF:
+      write_str("OK+BLEOFF\r\n");
+      if (curMode == ROLE_BLE_PERIPHERAL || curMode == ROLE_BLE_CENTRAL) {
+        setRole(ROLE_BT_OFF);
+        sendBTMode();
+      }
+      break;
+
+    case AT_CMD_A2DPON:
+      if (bt_a2dp_supported()) {
+        write_str("OK+A2DPON\r\n");
+        setRole(ROLE_BTEDR_AUDIO_SOURCE);
+        sendBTMode();
+        if (curMode == ROLE_BTEDR_AUDIO_SOURCE && a2dp_media_started()) {
+          write_str("A2DP media started\r\n");
+        }
+      } else {
+        ESP_LOGE(LOG_UART, "A2DP not supported in this build");
+        write_str("ERROR\r\n");
+      }
+      break;
+
+    case AT_CMD_A2DPOFF:
+      write_str("OK+A2DPOFF\r\n");
+      if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+        setRole(ROLE_BT_OFF);
+        sendBTMode();
+      }
+      break;
+
+    case AT_CMD_A2DPCON:
+      if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+        write_str("OK+A2DPCON\r\n");
+        a2dp_connect(cmd.argument);
+      } else {
+        write_str("ERROR\r\n");
+      }
+      break;
+
+    case AT_CMD_A2DPVOL:
+      if (curMode == ROLE_BTEDR_AUDIO_SOURCE) {
+        if (strcmp(cmd.argument, "?") == 0) {
+          write_str("OK+A2DPVOL:128\r\n");
+          break;
+        }
+
+        char *end = NULL;
+        long volume = strtol(cmd.argument, &end, 10);
+        if (end == cmd.argument || *end != '\0' || volume < 0 || volume > 127) {
+          write_str("ERROR\r\n");
+        } else if (a2dp_set_volume((uint8_t)volume)) {
+          write_fmt("OK+A2DPVOL:%u\r\n", (unsigned)volume);
+        } else {
+          write_str("ERROR\r\n");
+        }
+      } else {
+        write_str("ERROR\r\n");
+      }
+      break;
+
+    case AT_CMD_A2DPSTART:
+      if (curMode == ROLE_BTEDR_AUDIO_SOURCE && a2dp_play()) {
+        write_str("OK+A2DPSTART\r\n");
+      } else {
+        write_str("ERROR\r\n");
+      }
+      break;
+
+    case AT_CMD_A2DPSTOP:
+      if (curMode == ROLE_BTEDR_AUDIO_SOURCE && a2dp_stop()) {
+        write_str("OK+A2DPSTOP\r\n");
+      } else {
+        write_str("ERROR\r\n");
+      }
+      break;
+
+    case AT_CMD_BTOFF:
+      write_str("OK+BTOFF\r\n");
+      setRole(ROLE_BT_OFF);
+      sendBTMode();
+      break;
+
+    case AT_CMD_BTBOTH:
+      ESP_LOGE(LOG_UART, "BLE and A2DP cannot run simultaneously");
+      write_str("ERROR\r\n");
       break;
 
     case AT_CMD_UNKNOWN:
@@ -305,6 +464,10 @@ void runUARTHead(void *param)
     ESP_LOGE(LOG_UART, "Invalid role loaded, defaulting to central");
     settings.role = ROLE_BLE_CENTRAL;
   }
+  if (settings.role == ROLE_BTEDR_AUDIO_SOURCE && !bt_a2dp_supported()) {
+    ESP_LOGE(LOG_UART, "A2DP not supported in this build, defaulting to central");
+    settings.role = ROLE_BLE_CENTRAL;
+  }
   setRole(settings.role);
 
   uint8_t *data = (uint8_t *)malloc(UART_RX_BUFFER + 1);
@@ -317,7 +480,11 @@ void runUARTHead(void *param)
 
   // Peripheral passthrough buffer (<= minimum ATT MTU payload).
   static uint8_t passBuf[PASSTHROUGH_BUF];
-  static uint8_t passLen = 0;
+  static size_t passLen = 0;
+  static uint8_t pcmBuf[UART_RX_BUFFER];
+  static size_t pcmLen = 0;
+  static uint8_t atPrefix[2];
+  static size_t atPrefixLen = 0;
 
   for (;;) {
     int cnt = uart_read_bytes(uart_num, data, UART_RX_BUFFER, 0);
@@ -339,31 +506,47 @@ void runUARTHead(void *param)
           parserATCommand(atcommand);
           atcommandlen = -1;
         }
-      } else {
-        // Detect the "AT+" prefix (EdgeTX always sends "AT+..."). Requiring the
-        // '+' avoids false positives from 'A','T' sequences in binary traffic.
-        static char lc1 = 0;
-        static char lc2 = 0;
-        if (lc2 == 'A' && lc1 == 'T' && c == '+') {
-          atcommandlen = 0;
-          atcommand[atcommandlen++] = '+';
-        } else if (curMode == ROLE_BLE_PERIPHERAL) {
-          // Forward the radio's telemetry/trainer traffic unchanged.
-          passBuf[passLen++] = c;
-          if (passLen >= sizeof(passBuf)) {
-            bt_server_send_data(passBuf, passLen);
-            passLen = 0;
+      } else if (atPrefixLen == 0) {
+        if (c == 'A') {
+          atPrefix[atPrefixLen++] = c;
+        } else {
+          forward_radio_byte(c, passBuf, &passLen, pcmBuf, &pcmLen);
+        }
+      } else if (atPrefixLen == 1) {
+        if (c == 'T') {
+          atPrefix[atPrefixLen++] = c;
+        } else {
+          forward_radio_byte(atPrefix[0], passBuf, &passLen, pcmBuf, &pcmLen);
+          atPrefixLen = 0;
+          if (c == 'A') {
+            atPrefix[atPrefixLen++] = c;
+          } else {
+            forward_radio_byte(c, passBuf, &passLen, pcmBuf, &pcmLen);
           }
         }
-        // In central/master the radio only sends AT commands; discard the rest.
-        lc2 = lc1;
-        lc1 = (char)c;
+      } else if (c == '+') {
+        atPrefixLen = 0;
+        atcommandlen = 0;
+        atcommand[atcommandlen++] = '+';
+      } else {
+        forward_radio_byte(atPrefix[0], passBuf, &passLen, pcmBuf, &pcmLen);
+        forward_radio_byte(atPrefix[1], passBuf, &passLen, pcmBuf, &pcmLen);
+        atPrefixLen = 0;
+        if (c == 'A') {
+          atPrefix[atPrefixLen++] = c;
+        } else {
+          forward_radio_byte(c, passBuf, &passLen, pcmBuf, &pcmLen);
+        }
       }
     }
 
     if (passLen > 0) {
-      bt_server_send_data(passBuf, passLen);
+      bt_server_send_data(passBuf, (uint8_t)passLen);
       passLen = 0;
+    }
+    if (pcmLen > 0) {
+      a2dp_feed_pcm(pcmBuf, pcmLen);
+      pcmLen = 0;
     }
 
     settings_process();
@@ -392,14 +575,24 @@ static void setRole(role_t role)
   switch (curMode) {
     case ROLE_BLE_CENTRAL:
     case ROLE_BLE_PERIPHERAL:
+      lastBleRole = curMode;
       bt_disable();
+      break;
+    case ROLE_BTEDR_AUDIO_SOURCE:
+      bt_a2dp_cancel_discovery();
+      a2dp_deinit();
+      bt_disable();
+      a2dpScanActive = false;
       break;
     default:
       break;
   }
 
+  atcommandlen = -1;
+
   curMode = role;
   settings.role = curMode;
+  ESP_LOGI(LOG_UART, "Active Bluetooth mode: %s", role_name(curMode));
 
   switch (curMode) {
     case ROLE_BLE_CENTRAL:
@@ -411,6 +604,16 @@ static void setRole(role_t role)
       btPeripherialState = PERIPHERIAL_STATE_DISCONNECTED;
       bt_init();
       bt_server_init();
+      break;
+    case ROLE_BTEDR_AUDIO_SOURCE:
+      bt_classic_init();
+      if (!a2dp_init(settings.name)) {
+        a2dp_deinit();
+        bt_disable();
+        curMode = ROLE_BT_OFF;
+        settings.role = curMode;
+        ESP_LOGE(LOG_UART, "A2DP start failed, Bluetooth is off");
+      }
       break;
     default:
       break;
@@ -553,6 +756,25 @@ static void runBT(void)
     case ROLE_BLE_PERIPHERAL:
       runBTPeripherial();
       break;
+    case ROLE_BTEDR_AUDIO_SOURCE: {
+      a2dp_process();
+      uint8_t volume;
+      while (a2dp_get_volume_update(&volume)) {
+        write_fmt("A2DPVOL:%u\r\n", (unsigned)volume);
+      }
+      if (a2dpScanActive) {
+        bt_addr_t address;
+        while (bt_a2dp_get_discovery_result(address)) {
+          char address_text[BT_ADDR_STR_LEN];
+          write_fmt("OK+DISC:%s\r\n", bt_addr_to_str(address_text, address));
+        }
+        if (bt_a2dp_discovery_complete()) {
+          write_str("OK+DISCE\r\n");
+          a2dpScanActive = false;
+        }
+      }
+      break;
+    }
     default:
       break;
   }

@@ -8,9 +8,13 @@
 #include <string.h>
 
 #include "esp_bt.h"
+#if !defined(USE_NIMBLE) && defined(CONFIG_BT_CLASSIC_ENABLED)
+#include "esp_gap_bt_api.h"
+#endif
 #include "esp_err.h"
 #include "esp_log.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #if defined(USE_NIMBLE)
 #include "nimble/nimble_port.h"
@@ -30,6 +34,15 @@ esp_bd_addr_t rmtbtaddress;
 
 /** Current device name (mirrors the settings name, for the host). */
 static char s_btname[MAX_BTNAME_LEN] = "BTWifiMod";
+
+bool bt_a2dp_supported(void)
+{
+#if !defined(USE_NIMBLE) && defined(CONFIG_BT_CLASSIC_ENABLED) && defined(CONFIG_BT_A2DP_ENABLE)
+  return true;
+#else
+  return false;
+#endif
+}
 
 #if defined(USE_NIMBLE)
 
@@ -71,6 +84,11 @@ void bt_disable(void)
   vTaskDelay(pdMS_TO_TICKS(BT_PAUSE_BEFORE_RESTART));
 }
 
+void bt_classic_init(void)
+{
+  ESP_LOGE(LOG_BT, "Classic Bluetooth is not supported by the NimBLE build");
+}
+
 void bt_set_name(const char *name)
 {
   strncpy(s_btname, name, sizeof(s_btname) - 1);
@@ -82,12 +100,14 @@ void bt_set_name(const char *name)
 #else  // !USE_NIMBLE (Bluedroid)
 
 static bool s_memreleased = false;
+static bool s_classic_mode = false;
 
-void bt_init(void)
+static void bt_start_stack(esp_bt_mode_t mode)
 {
   esp_err_t ret;
+  esp_bt_mode_t controller_mode = bt_a2dp_supported() ? ESP_BT_MODE_BTDM : mode;
 
-  if (!s_memreleased) {
+  if (!s_memreleased && !bt_a2dp_supported()) {
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
     s_memreleased = true;
   }
@@ -99,11 +119,12 @@ void bt_init(void)
     return;
   }
 
-  ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
+  ret = esp_bt_controller_enable(controller_mode);
   if (ret != ESP_OK) {
     ESP_LOGE(LOG_BT, "%s: controller enable failed: %s", __func__, esp_err_to_name(ret));
     return;
   }
+  s_classic_mode = mode == ESP_BT_MODE_CLASSIC_BT;
 
   esp_bluedroid_config_t bluedroid_cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
   ret = esp_bluedroid_init_with_cfg(&bluedroid_cfg);
@@ -118,7 +139,22 @@ void bt_init(void)
     return;
   }
 
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P9);
+  if (mode == ESP_BT_MODE_BLE) {
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P9);
+  }
+}
+
+void bt_init(void)
+{
+  ESP_LOGI(LOG_BT, "Starting BLE stack");
+  bt_start_stack(ESP_BT_MODE_BLE);
+}
+
+// Note: BLE and Classic BT are never run together, the stack is restarted when switching.
+void bt_classic_init(void)
+{
+  ESP_LOGI(LOG_BT, "Starting Classic BT stack");
+  bt_start_stack(ESP_BT_MODE_CLASSIC_BT);
 }
 
 void bt_disable(void)
@@ -128,6 +164,7 @@ void bt_disable(void)
   esp_bluedroid_deinit();
   esp_bt_controller_disable();
   esp_bt_controller_deinit();
+  s_classic_mode = false;
 
   ESP_LOGI(LOG_BT, "Pausing to shutdown");
   vTaskDelay(pdMS_TO_TICKS(BT_PAUSE_BEFORE_RESTART));
@@ -137,7 +174,15 @@ void bt_set_name(const char *name)
 {
   strncpy(s_btname, name, sizeof(s_btname) - 1);
   s_btname[sizeof(s_btname) - 1] = '\0';
-  esp_err_t ret = esp_ble_gap_set_device_name(s_btname);
+  esp_err_t ret;
+#if defined(CONFIG_BT_CLASSIC_ENABLED)
+  if (s_classic_mode) {
+    ret = esp_bt_gap_set_device_name(s_btname);
+  } else
+#endif
+  {
+    ret = esp_ble_gap_set_device_name(s_btname);
+  }
   if (ret != ESP_OK) {
     ESP_LOGW(LOG_BT, "set device name failed: %s", esp_err_to_name(ret));
   }

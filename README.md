@@ -20,6 +20,7 @@ Documentation: https://btwifimod.gitbook.io/
 | Auto-connect to the last known device | Supported |
 | Device name from `AT+NAME` (persisted and advertised) | Supported |
 | Selectable BLE host: Bluedroid or NimBLE | Supported |
+| Classic A2DP audio source (Bluedroid, Classic-BT boards) | Supported |
 
 ## How telemetry works
 
@@ -49,8 +50,9 @@ service (`0xFFF0`, characteristic `0xFFF6`, NOTIFY).
 
 ## Wiring
 
-The module talks to the radio over a 3.3 V UART link (8N1, 115200 baud). Only
-TX, RX and GND are required; add +5V if the module is powered from the radio.
+The module talks to the radio over a 3.3 V UART link (8N1, 115200 baud at
+startup). A2DP PCM mode can switch the link to 460800 baud. Only TX, RX and GND
+are required; add +5V if the module is powered from the radio.
 The data lines are **crossed**: the module TX goes to the radio RX and the
 module RX to the radio TX. Keep GND common with the radio, and power the module
 from a supply that can handle the ESP32 current peaks.
@@ -74,12 +76,16 @@ The last two rows are the reference, non-validated targets (see
 
 ## EdgeTX protocol
 
-The module speaks the FrSky Bluetooth AT protocol over an 8N1 UART link at
-115200 baud. All responses are `\r\n`-terminated; the real ACK that advances
-EdgeTX is the `Central:<addr>` / `Peripheral:<addr>` line emitted after
-`AT+TXPW` / `AT+ROLE`. Trainer and S.Port frames are `0x7E`-delimited and
-byte-stuffed, while CRSF/Ghost are forwarded raw. See `AGENTS.md` for the full
-set of protocol invariants.
+The module speaks the FrSky Bluetooth AT protocol over an 8N1 UART link. The
+link starts at 115200 baud for the boot handshake. `AT+BAUD4` selects 115200;
+`AT+BAUD6` selects 460800 for mono A2DP PCM. Baud commands have no response, so
+EdgeTX must switch its UART immediately after sending the command. A2DP audio
+input is raw signed 16-bit little-endian mono PCM at 16 kHz; the module
+resamples it for the Bluetooth sink. All AT responses are `\r\n`-terminated;
+the real ACK that advances EdgeTX is the `Central:<addr>` / `Peripheral:<addr>`
+line emitted after `AT+TXPW` / `AT+ROLE`. Trainer and S.Port frames are
+`0x7E`-delimited and byte-stuffed, while CRSF/Ghost are forwarded raw. See
+`AGENTS.md` for the full set of protocol invariants.
 
 ## Code structure
 
@@ -109,14 +115,15 @@ doc/BENCH.md      Bench setup, procedure and validation status.
 PlatformIO (ESP-IDF). Two BLE hosts are selectable: Bluedroid (default) or
 NimBLE.
 
-**Supported targets** (app partition 1 MB):
+**Supported targets** (Bluedroid builds for Classic-Bluetooth boards also carry
+the A2DP source and use the 1.34 MB `pico_partitions.csv` app partition):
 
-| Environment | BLE host | Flash | Board |
-|---|---|---|---|
-| `C3SuperMini` | Bluedroid | ~84 % | ESP32-C3 SuperMini |
-| `C3SuperMini_nimble` | NimBLE | ~52 % | ESP32-C3 SuperMini |
-| `ESP32_DEV38P` | Bluedroid | ~86 % | ESP32-DEV-38P |
-| `ESP32_DEV38P_nimble` | NimBLE | ~53 % | ESP32-DEV-38P |
+| Environment | BLE host | App partition | Flash | Board |
+|---|---|---|---|---|
+| `C3SuperMini` | Bluedroid | 1 MB | ~84 % | ESP32-C3 SuperMini |
+| `C3SuperMini_nimble` | NimBLE | 1 MB | ~52 % | ESP32-C3 SuperMini |
+| `ESP32_DEV38P` | Bluedroid + A2DP | 1.34 MB | ~91 % | ESP32-DEV-38P |
+| `ESP32_DEV38P_nimble` | NimBLE | 1 MB | ~53 % | ESP32-DEV-38P |
 
 **Reference targets** (app partition 1.31 MB via `pico_partitions.csv`, not
 hardware-validated):
@@ -192,18 +199,72 @@ module:
 
 | Command | Meaning |
 |---|---|
-| `AT+BAUD4` | baud rate level (this firmware stays at 115200) |
+| `AT+BAUD4` | switch to 115200 baud |
+| `AT+BAUD6` | switch to 460800 baud for mono A2DP PCM |
 | `AT+NAME<name>` | set the Bluetooth name (persisted and advertised) |
 | `AT+TXPW<n>` | TX power (acknowledged) |
 | `AT+ROLE0` | Peripheral (telemetry / trainer slave) |
 | `AT+ROLE1` | Central (trainer master) |
-| `AT+DISC?` | start a scan (central) |
+| `AT+DISC?` | scan BLE in Central mode or Classic Bluetooth in A2DP mode |
 | `AT+CON<addr>` | connect to a device (central) |
+| `AT+A2DPON` | enable the Classic Bluetooth A2DP source |
+| `AT+A2DPCON<addr>` | connect to an A2DP sink (12 hex digits, no separators) |
+| `AT+A2DPOFF` | stop A2DP and turn Bluetooth off |
+| `AT+A2DPVOL<n>` | set AVRCP absolute volume (0..127) |
+| `AT+A2DPVOL?` | query AVRCP's 128 logical volume values |
+| `AT+A2DPSTART` / `AT+A2DPSTOP` | play or stop the A2DP sink |
+| `AT+BLEON` / `AT+BLEOFF` | enable the last BLE role / disable BLE |
+| `AT+BTOFF` | turn Bluetooth off |
 | `AT+CLEAR` | forget the saved device |
 | `AT+HTRESET` | reset the headtracker (BTWifiModule extension) |
 
 Responses: `OK+...`, `Central:<addr>`, `Peripheral:<addr>`, `Connected:<addr>`,
-`DisConnected`, `ERROR`.
+`DisConnected`, `A2DPVOL:<n>` (unsolicited sink volume update, 0..127), `ERROR`.
+AVRCP exposes a logical range of 0..127; it does not report the speaker's
+physical volume-detent count.
+
+A2DP is enabled in the Bluedroid configuration of every Classic-Bluetooth board
+(Radiomaster Pico and ESP32-DEV-38P) and never in the NimBLE build, which is
+BLE-only. On the ESP32-DEV-38P the AT link is UART2 (GPIO18 TX / GPIO19 RX) while
+logs stay on the CP2102 port (UART0), so A2DP is driven from a USB-UART adapter or
+the radio, not the log port.
+For a test without EdgeTX PCM input, build and flash `RM_pico_a2dp_test`; it
+streams a local 500 Hz tone. Connect to a discoverable sink with:
+
+```text
+AT+A2DPON
+AT+DISC?
+AT+A2DPCON<12-digit-address>
+```
+
+After the connection is established, send `AT+BAUD6` before transmitting PCM.
+To return to the normal radio link speed, send `AT+BAUD4` at 460800 baud.
+For PC-fed audio, install `pyserial` on Windows:
+
+```powershell
+py -m pip install pyserial
+```
+
+Prepare a mono, 16-bit PCM WAV at 16 kHz. If needed, convert an audio file with
+FFmpeg:
+
+```powershell
+ffmpeg -i input.mp3 -ac 1 -ar 16000 -c:a pcm_s16le audio.wav
+```
+
+Flash the normal `RM_pico` firmware (not `RM_pico_a2dp_test`, which uses its
+internal tone), close PuTTY, then run the sender. It probes at 115200 and
+460800, resets and restarts the A2DP stack, and restores 115200 if it detects a
+460800 session. It defaults to COM4 and the sink MAC `FC58FAACAA1A`:
+
+```powershell
+py tools\uart_audio_sender.py audio.wav
+```
+
+Override either default with `--port` or `--address`. The sender switches the
+module and PC to 460800, verifies the new rate, and prebuffers audio before
+connecting. It returns both sides to 115200 when playback ends. If neither baud
+probe receives a response, reset the module and retry.
 
 ## Credits
 

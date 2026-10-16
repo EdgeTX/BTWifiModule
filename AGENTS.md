@@ -92,8 +92,10 @@ Key invariants:
   CRSF/Ghost are forwarded raw. The module is a pure passthrough.
 - Master trainer = central (`AT+ROLE1`), slave/telemetry = peripheral
   (`AT+ROLE0`).
-- The firmware stays at 115200 baud; `AT+BAUD4` is acknowledged implicitly by
-  EdgeTX switching to 115200 without checking a response.
+- UART starts at 115200 for the EdgeTX boot handshake. `AT+BAUD4` selects
+  115200; `AT+BAUD6` selects 460800 for mono 16 kHz A2DP PCM. Both baud changes
+  have no response, so EdgeTX must switch its UART immediately after sending
+  the command.
 
 ## Build & test
 
