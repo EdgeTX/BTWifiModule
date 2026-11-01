@@ -322,6 +322,7 @@ bool a2dp_init(const char *device_name)
   s_pending_input_byte_valid = false;
   s_pending_output_byte_valid = false;
 #endif
+  audio_resampler_init();
   audio_resampler_reset(&s_resampler);
 #if defined(A2DP_TEST_TONE)
   s_test_tone_index = 0;
@@ -458,6 +459,11 @@ void a2dp_feed_pcm(const uint8_t *data, size_t length)
   (void)data;
   (void)length;
 #endif
+}
+
+void a2dp_set_input_rate(uint32_t rate_hz)
+{
+  audio_resampler_set_input_rate(&s_resampler, rate_hz);
 }
 
 void a2dp_process(void)
@@ -702,6 +708,7 @@ void a2dp_feed_pcm(const uint8_t *data, size_t length)
   (void)data;
   (void)length;
 }
+void a2dp_set_input_rate(uint32_t rate_hz) { (void)rate_hz; }
 void a2dp_process(void) {}
 bool a2dp_media_started(void) { return false; }
 bool a2dp_set_volume(uint8_t volume) { (void)volume; return false; }

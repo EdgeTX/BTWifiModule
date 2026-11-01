@@ -93,7 +93,8 @@ Key invariants:
 - Master trainer = central (`AT+ROLE1`), slave/telemetry = peripheral
   (`AT+ROLE0`).
 - UART starts at 115200 for the EdgeTX boot handshake. `AT+BAUD4` selects
-  115200; `AT+BAUD6` selects 460800 for mono 16 kHz A2DP PCM. Both baud changes
+  115200; `AT+BAUD6` selects 460800 for mono 16 kHz A2DP PCM; `AT+BAUD7` selects
+  921600 for mono 32 kHz A2DP PCM. Both baud changes
   have no response, so EdgeTX must switch its UART immediately after sending
   the command.
 

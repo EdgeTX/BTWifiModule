@@ -66,6 +66,14 @@ void test_baud_argument(void)
   char a2dp_baud[] = "AT+BAUD6\r\n";
   at_command_parse_t default_result = at_command_parse(default_baud);
   at_command_parse_t a2dp_result = at_command_parse(a2dp_baud);
+  char a2dp_32k_baud[] = "AT+BAUD7\r\n";
+  at_command_parse_t a2dp_32k_result = at_command_parse(a2dp_32k_baud);
+  TEST_ASSERT_EQUAL(AT_CMD_BAUD, a2dp_32k_result.command);
+  TEST_ASSERT_EQUAL_STRING("7", a2dp_32k_result.argument);
+  char fast_baud[] = "AT+BAUD10\r\n";
+  at_command_parse_t fast_result = at_command_parse(fast_baud);
+  TEST_ASSERT_EQUAL(AT_CMD_BAUD, fast_result.command);
+  TEST_ASSERT_EQUAL_STRING("10", fast_result.argument);
   TEST_ASSERT_EQUAL(AT_CMD_BAUD, default_result.command);
   TEST_ASSERT_EQUAL_STRING("4", default_result.argument);
   TEST_ASSERT_EQUAL(AT_CMD_BAUD, a2dp_result.command);

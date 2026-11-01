@@ -51,7 +51,7 @@ service (`0xFFF0`, characteristic `0xFFF6`, NOTIFY).
 ## Wiring
 
 The module talks to the radio over a 3.3 V UART link (8N1, 115200 baud at
-startup). A2DP PCM mode can switch the link to 460800 baud. Only TX, RX and GND
+startup). A2DP PCM mode can switch the link to 460800 or 921600 baud. Only TX, RX and GND
 are required; add +5V if the module is powered from the radio.
 The data lines are **crossed**: the module TX goes to the radio RX and the
 module RX to the radio TX. Keep GND common with the radio, and power the module
@@ -78,9 +78,9 @@ The last two rows are the reference, non-validated targets (see
 
 The module speaks the FrSky Bluetooth AT protocol over an 8N1 UART link. The
 link starts at 115200 baud for the boot handshake. `AT+BAUD4` selects 115200;
-`AT+BAUD6` selects 460800 for mono A2DP PCM. Baud commands have no response, so
+`AT+BAUD6` selects 460800 for mono 16 kHz A2DP PCM and `AT+BAUD7` selects 921600 for mono 32 kHz A2DP PCM. Baud commands have no response, so
 EdgeTX must switch its UART immediately after sending the command. A2DP audio
-input is raw signed 16-bit little-endian mono PCM at 16 kHz; the module
+input is raw signed 16-bit little-endian mono PCM at 16 kHz (BAUD6) or 32 kHz (BAUD7); the module
 resamples it for the Bluetooth sink. All AT responses are `\r\n`-terminated;
 the real ACK that advances EdgeTX is the `Central:<addr>` / `Peripheral:<addr>`
 line emitted after `AT+TXPW` / `AT+ROLE`. Trainer and S.Port frames are
@@ -200,7 +200,9 @@ module:
 | Command | Meaning |
 |---|---|
 | `AT+BAUD4` | switch to 115200 baud |
-| `AT+BAUD6` | switch to 460800 baud for mono A2DP PCM |
+| `AT+BAUD6` | switch to 460800 baud for mono 16 kHz A2DP PCM |
+| `AT+BAUD7` | switch to 921600 baud for mono 32 kHz A2DP PCM |
+| `AT+BAUD8` / `AT+BAUD9` / `AT+BAUD10` | same 32 kHz PCM at 1.87 / 3.75 / 5.25 Mbaud |
 | `AT+NAME<name>` | set the Bluetooth name (persisted and advertised) |
 | `AT+TXPW<n>` | TX power (acknowledged) |
 | `AT+ROLE0` | Peripheral (telemetry / trainer slave) |

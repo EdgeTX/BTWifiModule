@@ -16,11 +16,14 @@ void a2dp_deinit(void);
 void a2dp_connect(const char *addr);
 
 /**
- * Queue raw signed 16-bit little-endian mono PCM at 16 kHz from the radio UART.
+ * Queue raw signed 16-bit little-endian mono PCM from the radio UART (16 kHz by default).
  * The A2DP callback resamples it to ESP-IDF's 44.1 kHz stereo PCM format.
  * Define A2DP_TEST_TONE at build time to substitute a local 500 Hz test signal.
  */
 void a2dp_feed_pcm(const uint8_t *data, size_t length);
+
+/** Set the sample rate of the PCM fed through a2dp_feed_pcm() (Hz). */
+void a2dp_set_input_rate(uint32_t rate_hz);
 
 /** Process A2DP events and start the media stream when the connection is ready. */
 void a2dp_process(void);

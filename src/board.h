@@ -60,13 +60,18 @@
 /* ------------------------------------------------------------------------- */
 
 /** UART receive/transmit buffer size (bytes). */
-#define UART_RX_BUFFER 512
+#define UART_RX_BUFFER 1024
 #define UART_TX_BUFFER 512
 
 /** UART speeds used by the EdgeTX boot handshake and A2DP PCM stream. */
 #define BAUD_DEFAULT 115200
-#define BAUD_A2DP_PCM 460800
-#define BAUD_MAXIMUM 921600
+#define BAUD_A2DP_PCM 460800      /* AT+BAUD6: mono 16 kHz PCM */
+#define BAUD_A2DP_PCM_32K 921600  /* AT+BAUD7: mono 32 kHz PCM */
+/* Same 32 kHz PCM at the EdgeTX RF-module rates (see CROSSFIRE_BAUDRATES). */
+#define BAUD_A2DP_PCM_32K_1M87 1870000  /* AT+BAUD8 */
+#define BAUD_A2DP_PCM_32K_3M75 3750000  /* AT+BAUD9 */
+#define BAUD_A2DP_PCM_32K_5M25 5250000  /* AT+BAUD10 */
+#define BAUD_MAXIMUM 5250000
 
 /** Maximum Bluetooth name length (advertised and persisted). */
 #define LEN_BLUETOOTH_NAME 20

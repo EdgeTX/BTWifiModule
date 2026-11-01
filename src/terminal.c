@@ -292,16 +292,31 @@ static void parserATCommand(char *line)
 
     case AT_CMD_BAUD: {
       uint32_t baud_rate;
+      uint32_t pcm_rate = 16000;
       if (strcmp(cmd.argument, "4") == 0) {
         baud_rate = BAUD_DEFAULT;
       } else if (strcmp(cmd.argument, "6") == 0) {
         baud_rate = BAUD_A2DP_PCM;
+      } else if (strcmp(cmd.argument, "7") == 0) {
+        baud_rate = BAUD_A2DP_PCM_32K;
+        pcm_rate = 32000;
+      } else if (strcmp(cmd.argument, "8") == 0) {
+        baud_rate = BAUD_A2DP_PCM_32K_1M87;
+        pcm_rate = 32000;
+      } else if (strcmp(cmd.argument, "9") == 0) {
+        baud_rate = BAUD_A2DP_PCM_32K_3M75;
+        pcm_rate = 32000;
+      } else if (strcmp(cmd.argument, "10") == 0) {
+        baud_rate = BAUD_A2DP_PCM_32K_5M25;
+        pcm_rate = 32000;
       } else {
         ESP_LOGW(LOG_UART, "Unsupported baud level: %s", cmd.argument);
         break;
       }
 
-      ESP_LOGI(LOG_UART, "Switching UART baud to %u", (unsigned)baud_rate);
+      a2dp_set_input_rate(pcm_rate);
+      ESP_LOGI(LOG_UART, "Switching UART baud to %u (PCM %u Hz)", (unsigned)baud_rate,
+               (unsigned)pcm_rate);
       esp_err_t ret = uart_set_baudrate(uart_num, baud_rate);
       if (ret != ESP_OK) {
         ESP_LOGE(LOG_UART, "Unable to switch UART baud to %u: %s", (unsigned)baud_rate,

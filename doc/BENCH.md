@@ -73,6 +73,7 @@ response. Run it once per firmware variant.
 | `AT+CLEAR`     | `OK+CLEAR`                                          | central; peripheral none |
 | `AT+BAUD4`     | no response; switches to 115200                     | -                      |
 | `AT+BAUD6`     | no response; switches to 460800                     | A2DP PCM               |
+| `AT+BAUD7`     | no response; switches to 921600                | A2DP PCM 32 kHz        |
 | `AT+HTRESET`   | `OK+HTRESET`, or `ERROR` unless headtracker board   | -                      |
 | unknown        | no response                                         | -                      |
 
