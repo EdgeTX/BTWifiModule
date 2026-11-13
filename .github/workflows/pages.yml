@@ -50,6 +50,7 @@ jobs:
                   -e ESP32_DEV38P -e ESP32_DEV38P_nimble \
                   -e ESP32S3SuperMini -e ESP32S3SuperMini_nimble \
                   -e RM_pico -e RM_pico_nimble \
+                  -e RM_Wireless -e RM_Wireless_nimble \
                   -e pico32 -e pico32_nimble
 
       - name: Assemble web flasher
@@ -69,6 +70,8 @@ jobs:
           place ESP32S3SuperMini_nimble esp32s3supermini nimble
           place RM_pico              rmpico      bluedroid
           place RM_pico_nimble       rmpico      nimble
+          place RM_Wireless          rmwireless  bluedroid
+          place RM_Wireless_nimble   rmwireless  nimble
           place pico32               pico32      bluedroid
           place pico32_nimble        pico32      nimble
 
